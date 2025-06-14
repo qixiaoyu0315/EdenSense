@@ -87,6 +87,7 @@ DisplayMode currentMode = MODE_OVERVIEW;
 TempRecord sensorRecords[16];  // 假设最多16个传感器
 GraphState graphState = {0};   // 图表状态
 AlarmState alarmStates[16];  // 每个传感器的报警状态
+bool screenOn = true;  // 屏幕开关状态
 
 // 全局对象定义
 TFT_eSPI tft;
@@ -95,6 +96,8 @@ DallasTemperature sensors(&oneWire);
 OneButton button1(KEY1_PIN, true, true);
 OneButton button2(KEY2_PIN, true, true);
 OneButton button3(KEY3_PIN, true, true);
+OneButton button4(KEY4_PIN, true, true);
+
 
 // 函数声明
 void drawGraphBackground(int sensorIndex);
@@ -106,6 +109,7 @@ void updateTempRecords();
 void onButton1Click();
 void onButton2Click();
 void onButton3Click();
+void onButton4Click();
 void checkTemperatureAlarms(int sensorIndex, float temp);
 
 // 函数实现
@@ -476,6 +480,23 @@ void onButton3Click() {
   }
 }
 
+void onButton4Click() {
+  screenOn = !screenOn;  // 切换屏幕状态
+  if (screenOn) {
+    tft.writecommand(0x11);  // 退出睡眠模式
+    delay(120);              // 等待屏幕唤醒
+    tft.writecommand(0x29);  // 开启显示
+    digitalWrite(TFT_BL, HIGH);  // 开启背光
+  } else {
+    digitalWrite(TFT_BL, LOW);   // 关闭背光
+    delay(50);                   // 等待背光完全关闭
+    tft.writecommand(0x28);      // 关闭显示
+    tft.writecommand(0x10);      // 进入睡眠模式
+  }
+  Serial.print("屏幕已");
+  Serial.println(screenOn ? "开启" : "关闭");
+}
+
 void setup() {
   // 初始化串口
   Serial.begin(115200);
@@ -484,12 +505,27 @@ void setup() {
   button1.attachClick(onButton1Click);
   button2.attachClick(onButton2Click);
   button3.attachClick(onButton3Click);
+  button4.attachClick(onButton4Click);
+  
+  // 初始化背光控制
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);  // 默认开启背光
   
   // 初始化显示屏
   tft.init();
-  tft.initDMA();  // 启用DMA加速
+  tft.initDMA();
   tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
+  
+  // 设置显示屏参数
+  tft.writecommand(0x36);  // 设置显示方向
+  tft.writedata(0x00);     // 正常方向
+  
+  tft.writecommand(0x3A);  // 设置像素格式
+  tft.writedata(0x05);     // 16位/像素
+  
+  tft.writecommand(0x29);  // 开启显示
+  digitalWrite(TFT_BL, HIGH);  // 默认开启背光
   
   // 初始化传感器
   sensors.begin();
@@ -525,44 +561,37 @@ void setup() {
 }
 
 void loop() {
-  // 更新按键状态
+  // 更新按钮状态
   button1.tick();
   button2.tick();
   button3.tick();
+  button4.tick();
   
-  // 添加调试信息
-  static unsigned long lastDebugTime = 0;
-  if (millis() - lastDebugTime >= 1000) {  // 每秒打印一次状态
-    Serial.print("当前模式: ");
-    Serial.print(currentMode);
-    Serial.print(", 选中传感器: ");
-    Serial.println(selectedSensor);
-    lastDebugTime = millis();
+  // 如果屏幕关闭，只处理按键，不更新显示
+  if (!screenOn) {
+    return;
   }
   
   // 更新温度记录
   updateTempRecords();
   
-  // 定时更新温度
-  if (millis() - lastTempUpdate >= tempUpdateInterval) {
-    sensors.requestTemperatures();
-    lastTempUpdate = millis();
+  // 检查温度报警
+  for (int i = 0; i < totalSensors; i++) {
+    float temp = sensors.getTempCByIndex(i);
+    if (temp != DEVICE_DISCONNECTED_C) {
+      checkTemperatureAlarms(i, temp);
+    }
   }
   
   // 根据当前模式更新显示
-  switch(currentMode) {
-    case MODE_OVERVIEW:
-      displayOverview();
-      break;
-    case MODE_DETAIL:
-      displayDetailView(selectedSensor);
-      break;
-    case MODE_GRAPH:
-      drawGraph(selectedSensor);
-      break;
+  if (currentMode == MODE_GRAPH) {
+    drawGraph(selectedSensor);
+  } else {
+    displayOverview();
   }
   
-  delay(5);
+  // 控制刷新率
+  delay(50);
 }
 
 // 添加报警检查函数
