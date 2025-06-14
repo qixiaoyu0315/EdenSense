@@ -451,18 +451,17 @@ void onButton1Click() {
 }
 
 void onButton2Click() {
-  if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
-    // 循环切换到上一个传感器
-    if (selectedSensor > 0) {
-      selectedSensor--;
-    } else {
-      selectedSensor = totalSensors - 1;  // 如果是第一个，则跳转到最后一个
-    }
-    firstDraw = true;
-    graphState.needsFullRedraw = true;
-    Serial.print("Button2: 切换到传感器 ");
-    Serial.println(selectedSensor);
+  if (currentMode == MODE_OVERVIEW) {
+    currentMode = MODE_DETAIL;
+    Serial.println("切换到详细模式");
+  } else if (currentMode == MODE_DETAIL) {
+    currentMode = MODE_GRAPH;
+    Serial.println("切换到图表模式");
+  } else {
+    currentMode = MODE_OVERVIEW;
+    Serial.println("切换到概览模式");
   }
+  graphState.needsFullRedraw = true;  // 确保模式切换时重绘
 }
 
 void onButton3Click() {
@@ -584,10 +583,16 @@ void loop() {
   }
   
   // 根据当前模式更新显示
-  if (currentMode == MODE_GRAPH) {
-    drawGraph(selectedSensor);
-  } else {
-    displayOverview();
+  switch(currentMode) {
+    case MODE_OVERVIEW:
+      displayOverview();
+      break;
+    case MODE_DETAIL:
+      displayDetailView(selectedSensor);
+      break;
+    case MODE_GRAPH:
+      drawGraph(selectedSensor);
+      break;
   }
   
   // 控制刷新率
