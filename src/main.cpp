@@ -13,29 +13,31 @@
 #define KEY4_PIN   38    // K4: 未使用
 
 // DS18B20引脚定义
-const int oneWireBus = 4;     // 使用GPIO4作为数据线
+#define ONEWIRE_BUS 4    // 使用GPIO4作为数据线
 
-// 全局变量
-int selectedSensor = -1;      // 当前选择的传感器，-1表示显示所有
-int totalSensors = 0;         // 总传感器数量
-unsigned long lastButtonCheck = 0; // 上次按键检查时间
-const int debounceTime = 20;  // 按键防抖时间（毫秒）
-unsigned long lastTempUpdate = 0;  // 上次温度更新时间
-const int tempUpdateInterval = 1000;  // 温度更新间隔（毫秒）
-
-// 用于存储上一次的温度值
-float lastTemps[16] = {0};  // 假设最多16个传感器
-bool firstDraw = true;      // 首次绘制标志
-
-// 温度记录相关定义
-#define MAX_RECORDS 144  // 存储144个数据点
-#define RECORD_INTERVAL 600  // 记录间隔（秒）
+// 图表相关定义
 #define GRAPH_HEIGHT 120    // 图表高度
 #define GRAPH_WIDTH 240     // 图表宽度
 #define GRAPH_TOP 40        // 图表顶部位置
 #define GRAPH_LEFT 0        // 图表左侧位置
 #define INFO_HEIGHT 35      // 信息显示区域高度
 #define GRAPH_BOTTOM (GRAPH_TOP + GRAPH_HEIGHT)  // 图表底部位置
+
+// 温度记录相关定义
+#define MAX_RECORDS 144  // 存储144个数据点
+#define RECORD_INTERVAL 600  // 记录间隔（秒）
+
+// 温度报警相关定义
+#define TEMP_ALARM_HIGH 30.0  // 高温报警阈值
+#define TEMP_ALARM_LOW 10.0   // 低温报警阈值
+#define ALARM_BLINK_INTERVAL 500  // 报警闪烁间隔（毫秒）
+
+// 显示模式枚举
+enum DisplayMode {
+  MODE_OVERVIEW,    // 总览模式
+  MODE_DETAIL,      // 详情模式
+  MODE_GRAPH        // 图表模式
+};
 
 // 温度记录结构
 struct TempRecord {
@@ -45,86 +47,281 @@ struct TempRecord {
   int currentIndex;  // 当前写入位置
 };
 
-// 为每个传感器创建温度记录
-TempRecord sensorRecords[16];  // 假设最多16个传感器
-
-// 显示模式枚举
-enum DisplayMode {
-  MODE_OVERVIEW,    // 总览模式
-  MODE_DETAIL,      // 详情模式
-  MODE_GRAPH        // 图表模式
+// 图表状态结构
+struct GraphState {
+  float lastMinTemp;
+  float lastMaxTemp;
+  float lastAvgTemp;
+  float lastCurrentTemp;
+  int lastRecordCount;
+  bool needsFullRedraw;
+  char lastTimeLabels[5][8];  // 存储时间标签文本
 };
 
+// 报警状态结构
+struct AlarmState {
+  bool highAlarm;
+  bool lowAlarm;
+  unsigned long lastBlinkTime;
+  bool blinkState;
+};
+
+// 全局变量定义
+int selectedSensor = -1;      // 当前选择的传感器，-1表示显示所有
+int totalSensors = 0;         // 总传感器数量
+unsigned long lastButtonCheck = 0; // 上次按键检查时间
+const int debounceTime = 20;  // 按键防抖时间（毫秒）
+unsigned long lastTempUpdate = 0;  // 上次温度更新时间
+const int tempUpdateInterval = 1000;  // 温度更新间隔（毫秒）
+bool firstDraw = true;      // 首次绘制标志
+float lastTemps[16] = {0};  // 假设最多16个传感器
 DisplayMode currentMode = MODE_OVERVIEW;
+TempRecord sensorRecords[16];  // 假设最多16个传感器
+GraphState graphState = {0};   // 图表状态
+AlarmState alarmStates[16];  // 每个传感器的报警状态
 
-// 初始化显示屏
-TFT_eSPI tft = TFT_eSPI();
-
-// Setup a oneWire instance to communicate with any OneWire devices
-OneWire oneWire(oneWireBus);
-
-// Pass our oneWire reference to Dallas Temperature sensor 
+// 全局对象定义
+TFT_eSPI tft;
+OneWire oneWire(ONEWIRE_BUS);
 DallasTemperature sensors(&oneWire);
-
-// 创建 OneButton 对象
-OneButton button1(KEY1_PIN, true, true);  // true 表示使用内部上拉电阻，true 表示按键按下时为低电平
+OneButton button1(KEY1_PIN, true, true);
 OneButton button2(KEY2_PIN, true, true);
 OneButton button3(KEY3_PIN, true, true);
+
+// 函数声明
+void drawGraphBackground(int sensorIndex);
+void updateTempInfo(float minTemp, float maxTemp, float avgTemp, float currentTemp);
+void drawGraph(int sensorIndex);
+void displayOverview();
+void displayDetailView(int index);
+void updateTempRecords();
+void onButton1Click();
+void onButton2Click();
+void onButton3Click();
+void checkTemperatureAlarms(int sensorIndex, float temp);
+
+// 函数实现
+void drawGraphBackground(int sensorIndex) {
+  // 清除图表区域
+  tft.fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT, TFT_BLACK);
   
-// 按键回调函数
-void onButton1Click() {
-  if (currentMode == MODE_OVERVIEW) {
-    currentMode = MODE_DETAIL;
-    selectedSensor = 0;
-  } else if (currentMode == MODE_DETAIL) {
-    currentMode = MODE_GRAPH;
-  } else {
-    currentMode = MODE_OVERVIEW;
+  // 绘制边框
+  tft.drawRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT, TFT_WHITE);
+  
+  // 绘制水平网格线
+  for (int i = 1; i < 4; i++) {
+    int y = GRAPH_TOP + (GRAPH_HEIGHT * i / 4);
+    tft.drawLine(GRAPH_LEFT, y, GRAPH_LEFT + GRAPH_WIDTH, y, TFT_DARKGREY);
   }
-  firstDraw = true;
+  
+  // 绘制垂直网格线
+  for (int i = 1; i < 4; i++) {
+    int x = GRAPH_LEFT + (GRAPH_WIDTH * i / 4);
+    tft.drawLine(x, GRAPH_TOP, x, GRAPH_TOP + GRAPH_HEIGHT, TFT_DARKGREY);
+  }
+  
+  // 绘制时间标签
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setTextDatum(TC_DATUM);
+  
+  // 获取当前时间
+  time_t now = time(nullptr);
+  struct tm* timeinfo = localtime(&now);
+  
+  // 计算时间间隔（分钟）
+  int interval = RECORD_INTERVAL / 60;  // 转换为分钟
+  
+  // 绘制5个时间标签
+  for (int i = 0; i < 5; i++) {
+    int x = GRAPH_LEFT + (GRAPH_WIDTH * i / 4);
+    time_t labelTime = now - (RECORD_INTERVAL * (3 - i));
+    struct tm* labelTimeInfo = localtime(&labelTime);
+    
+    char timeStr[8];
+    strftime(timeStr, sizeof(timeStr), "%H:%M", labelTimeInfo);
+    tft.drawString(timeStr, x, GRAPH_TOP + GRAPH_HEIGHT + 5);
+    
+    // 保存时间标签文本
+    strncpy(graphState.lastTimeLabels[i], timeStr, sizeof(graphState.lastTimeLabels[i]) - 1);
+    graphState.lastTimeLabels[i][sizeof(graphState.lastTimeLabels[i]) - 1] = '\0';
+  }
 }
 
-void onButton2Click() {
-  if (currentMode == MODE_DETAIL && selectedSensor > 0) {
-        selectedSensor--;
-        firstDraw = true;
+void updateTempInfo(float minTemp, float maxTemp, float avgTemp, float currentTemp) {
+  static char lastInfo[4][16] = {""};  // 存储上一次的信息文本
+  char newInfo[4][16];  // 存储新的信息文本
+  
+  // 格式化新的信息文本
+  snprintf(newInfo[0], sizeof(newInfo[0]), "最低: %.1fC", minTemp);
+  snprintf(newInfo[1], sizeof(newInfo[1]), "最高: %.1fC", maxTemp);
+  snprintf(newInfo[2], sizeof(newInfo[2]), "平均: %.1fC", avgTemp);
+  snprintf(newInfo[3], sizeof(newInfo[3]), "当前: %.1fC", currentTemp);
+  
+  // 检查是否需要更新显示
+  bool needsUpdate = false;
+  for (int i = 0; i < 4; i++) {
+    if (strcmp(lastInfo[i], newInfo[i]) != 0) {
+      needsUpdate = true;
+      break;
+    }
+  }
+  
+  if (needsUpdate) {
+    // 清除信息显示区域
+    tft.fillRect(0, GRAPH_TOP + GRAPH_HEIGHT + 25, tft.width(), INFO_HEIGHT, TFT_BLACK);
+    
+    // 显示新的信息
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(1);
+    tft.setTextDatum(TL_DATUM);
+    
+    for (int i = 0; i < 4; i++) {
+      int y = GRAPH_TOP + GRAPH_HEIGHT + 25 + (i * 8);
+      tft.drawString(newInfo[i], 5, y);
+      strcpy(lastInfo[i], newInfo[i]);  // 更新存储的文本
+    }
+  }
+}
+
+void drawGraph(int sensorIndex) {
+  static int lastSensorIndex = -1;
+  static float lastMinTemp = -999;
+  static float lastMaxTemp = -999;
+  static float lastAvgTemp = -999;
+  static float lastCurrentTemp = -999;
+  static int lastRecordCount = 0;
+  
+  // 检查是否需要完全重绘
+  bool needsFullRedraw = firstDraw || 
+                        (lastSensorIndex != sensorIndex) || 
+                        graphState.needsFullRedraw;
+  
+  if (needsFullRedraw) {
+    drawGraphBackground(sensorIndex);
+    lastSensorIndex = sensorIndex;
+    graphState.needsFullRedraw = false;
+  }
+  
+  // 获取温度数据
+  float minTemp = 999;
+  float maxTemp = -999;
+  float sumTemp = 0;
+  float currentTemp = sensors.getTempCByIndex(sensorIndex);
+  int validCount = 0;
+  
+  // 计算统计数据
+  for (int i = 0; i < sensorRecords[sensorIndex].recordCount; i++) {
+    float temp = sensorRecords[sensorIndex].temps[i];
+    if (temp != DEVICE_DISCONNECTED_C) {
+      minTemp = min(minTemp, temp);
+      maxTemp = max(maxTemp, temp);
+      sumTemp += temp;
+      validCount++;
+    }
+  }
+  
+  float avgTemp = validCount > 0 ? sumTemp / validCount : 0;
+  
+  // 检查是否需要更新温度信息
+  bool needsInfoUpdate = needsFullRedraw ||
+                        (abs(minTemp - lastMinTemp) >= 0.1) ||
+                        (abs(maxTemp - lastMaxTemp) >= 0.1) ||
+                        (abs(avgTemp - lastAvgTemp) >= 0.1) ||
+                        (abs(currentTemp - lastCurrentTemp) >= 0.1);
+  
+  if (needsInfoUpdate) {
+    updateTempInfo(minTemp, maxTemp, avgTemp, currentTemp);
+    lastMinTemp = minTemp;
+    lastMaxTemp = maxTemp;
+    lastAvgTemp = avgTemp;
+    lastCurrentTemp = currentTemp;
+  }
+  
+  // 检查是否需要重绘图表
+  bool needsGraphUpdate = needsFullRedraw ||
+                         (sensorRecords[sensorIndex].recordCount != lastRecordCount);
+  
+  if (needsGraphUpdate) {
+    // 清除旧图表
+    tft.fillRect(GRAPH_LEFT + 1, GRAPH_TOP + 1, GRAPH_WIDTH - 2, GRAPH_HEIGHT - 2, TFT_BLACK);
+    
+    // 计算温度范围
+    float tempRange = maxTemp - minTemp;
+    if (tempRange < 1.0) tempRange = 1.0;  // 确保有最小范围
+    
+    // 绘制数据点
+    for (int i = 1; i < sensorRecords[sensorIndex].recordCount; i++) {
+      float temp1 = sensorRecords[sensorIndex].temps[i-1];
+      float temp2 = sensorRecords[sensorIndex].temps[i];
+      
+      if (temp1 != DEVICE_DISCONNECTED_C && temp2 != DEVICE_DISCONNECTED_C) {
+        // 计算坐标
+        int x1 = GRAPH_LEFT + ((i-1) * GRAPH_WIDTH / (MAX_RECORDS - 1));
+        int x2 = GRAPH_LEFT + (i * GRAPH_WIDTH / (MAX_RECORDS - 1));
+        int y1 = GRAPH_TOP + GRAPH_HEIGHT - ((temp1 - minTemp) * GRAPH_HEIGHT / tempRange);
+        int y2 = GRAPH_TOP + GRAPH_HEIGHT - ((temp2 - minTemp) * GRAPH_HEIGHT / tempRange);
+        
+        // 绘制线段
+        tft.drawLine(x1, y1, x2, y2, TFT_GREEN);
+        
+        // 绘制数据点
+        tft.fillCircle(x1, y1, 1, TFT_GREEN);
+        tft.fillCircle(x2, y2, 1, TFT_GREEN);
       }
     }
     
-void onButton3Click() {
-  if (currentMode == MODE_DETAIL && selectedSensor < totalSensors-1) {
-        selectedSensor++;
-        firstDraw = true;
+    lastRecordCount = sensorRecords[sensorIndex].recordCount;
+  }
+  
+  firstDraw = false;
+}
+
+void displayOverview() {
+  static bool firstOverview = true;
+  bool forceRedraw = firstDraw || firstOverview;
+  
+  if (forceRedraw) {
+    tft.fillScreen(TFT_BLACK);
+    firstOverview = false;
+  }
+  
+  // 显示所有传感器数据
+  for(int i = 0; i < totalSensors; i++) {
+    float tempC = sensors.getTempCByIndex(i);
+    int yPos = 20 + i * 25;
+    
+    // 检查温度报警
+    checkTemperatureAlarms(i, tempC);
+    
+    // 只在温度变化或首次显示时更新
+    if (forceRedraw || abs(tempC - lastTemps[i]) >= 0.1) {
+      // 清除该行显示区域
+      tft.fillRect(5, yPos-15, tft.width()-10, 20, TFT_BLACK);
+      
+      if(tempC != DEVICE_DISCONNECTED_C) {
+        // 根据报警状态选择颜色
+        uint16_t textColor = TFT_GREEN;
+        if (alarmStates[i].highAlarm && alarmStates[i].blinkState) {
+          textColor = TFT_RED;
+        } else if (alarmStates[i].lowAlarm && alarmStates[i].blinkState) {
+          textColor = TFT_BLUE;
+        }
+        
+        tft.setTextColor(textColor, TFT_BLACK);
+        String tempStr = "T" + String(i + 1) + ": " + String(tempC, 1) + "C";
+        tft.drawString(tempStr, 10, yPos);
+        lastTemps[i] = tempC;
+      } else if (forceRedraw) {
+        tft.setTextColor(TFT_RED, TFT_BLACK);
+        tft.drawString("T" + String(i + 1) + ": 未连接", 10, yPos);
       }
-}
-
-// 绘制标题栏（优化版本）
-void drawHeader(const char* title, bool forceRedraw = false) {
-  static char lastTitle[32] = "";
-  if (forceRedraw || strcmp(lastTitle, title) != 0) {
-    tft.fillRect(0, 0, tft.width(), 20, TFT_DARKGREY);
-    tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
-    tft.setTextSize(1);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString(title, tft.width()/2, 10);
-    strcpy(lastTitle, title);
+    }
   }
+  
+  firstDraw = false;
 }
 
-// 绘制底部状态栏（优化版本）
-void drawFooter(const char* hint, bool forceRedraw = false) {
-  static char lastHint[32] = "";
-  if (forceRedraw || strcmp(lastHint, hint) != 0) {
-    tft.fillRect(0, tft.height()-20, tft.width(), 20, TFT_DARKGREY);
-    tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
-    tft.setTextSize(1);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString(hint, tft.width()/2, tft.height()-10);
-    strcpy(lastHint, hint);
-  }
-}
-
-// 显示单个传感器数据（优化版本）
 void displayDetailView(int index) {
   static int lastIndex = -1;
   static float lastTemp = -999;
@@ -136,6 +333,7 @@ void displayDetailView(int index) {
   }
   
   float tempC = sensors.getTempCByIndex(index);
+  checkTemperatureAlarms(index, tempC);
   
   if (forceRedraw) {
     // 显示传感器编号
@@ -149,9 +347,17 @@ void displayDetailView(int index) {
     // 清除旧温度显示区域
     tft.fillRect(0, 50, tft.width(), 60, TFT_BLACK);
     
+    // 根据报警状态选择颜色
+    uint16_t textColor = TFT_GREEN;
+    if (alarmStates[index].highAlarm && alarmStates[index].blinkState) {
+      textColor = TFT_RED;
+    } else if (alarmStates[index].lowAlarm && alarmStates[index].blinkState) {
+      textColor = TFT_BLUE;
+    }
+    
     // 显示新温度
     tft.setTextSize(4);
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.setTextColor(textColor, TFT_BLACK);
     tft.drawString(String(tempC, 1), tft.width()/2, 80);
     
     // 显示摄氏度符号
@@ -169,42 +375,6 @@ void displayDetailView(int index) {
   firstDraw = false;
 }
 
-// 显示所有传感器数据（优化版本）
-void displayOverview() {
-  static bool firstOverview = true;
-  bool forceRedraw = firstDraw || firstOverview;
-  
-  if (forceRedraw) {
-    tft.fillScreen(TFT_BLACK);
-    firstOverview = false;
-  }
-  
-  // 显示所有传感器数据
-  for(int i = 0; i < totalSensors; i++) {
-    float tempC = sensors.getTempCByIndex(i);
-    int yPos = 20 + i * 25;
-    
-    // 只在温度变化或首次显示时更新
-    if (forceRedraw || abs(tempC - lastTemps[i]) >= 0.1) {
-      // 清除该行显示区域
-      tft.fillRect(5, yPos-15, tft.width()-10, 20, TFT_BLACK);
-      
-      if(tempC != DEVICE_DISCONNECTED_C) {
-        tft.setTextColor(TFT_GREEN, TFT_BLACK);
-        String tempStr = "T" + String(i + 1) + ": " + String(tempC, 1) + "C";
-        tft.drawString(tempStr, 10, yPos);
-        lastTemps[i] = tempC;
-      } else if (forceRedraw) {
-        tft.setTextColor(TFT_RED, TFT_BLACK);
-        tft.drawString("T" + String(i + 1) + ": 未连接", 10, yPos);
-      }
-    }
-  }
-  
-  firstDraw = false;
-}
-
-// 更新温度记录
 void updateTempRecords() {
   static unsigned long lastRecordTime = 0;
   unsigned long currentTime = millis();
@@ -229,158 +399,44 @@ void updateTempRecords() {
   }
 }
 
-// 用于存储上一次的图表数据
-struct GraphState {
-  float lastMinTemp;
-  float lastMaxTemp;
-  float lastAvgTemp;
-  float lastCurrentTemp;
-  int lastRecordCount;
-  bool needsFullRedraw;
-  char lastTimeLabels[5][8];  // 存储时间标签文本
-};
-
-GraphState graphState = {0};
-
-// 绘制图表背景（静态部分）
-void drawGraphBackground() {
-  // 清除图表区域
-  tft.fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT + INFO_HEIGHT, TFT_BLACK);
-  
-  // 绘制坐标轴
-  tft.drawLine(GRAPH_LEFT, GRAPH_BOTTOM, 
-               GRAPH_LEFT + GRAPH_WIDTH, GRAPH_BOTTOM, TFT_WHITE);
-  tft.drawLine(GRAPH_LEFT, GRAPH_TOP, 
-               GRAPH_LEFT, GRAPH_BOTTOM, TFT_WHITE);
-  
-  // 绘制网格线
-  for (int i = 0; i <= 4; i++) {
-    int y = GRAPH_TOP + (GRAPH_HEIGHT * i / 4);
-    tft.drawLine(GRAPH_LEFT, y, GRAPH_LEFT + GRAPH_WIDTH, y, TFT_DARKGREY);
+// 修改按键回调函数实现
+void onButton1Click() {
+  if (currentMode == MODE_OVERVIEW) {
+    currentMode = MODE_DETAIL;
+    selectedSensor = 0;  // 从第一个传感器开始
+  } else if (currentMode == MODE_DETAIL) {
+    currentMode = MODE_GRAPH;
+    // 保持在当前选中的传感器
+  } else {
+    currentMode = MODE_OVERVIEW;
+    selectedSensor = -1;  // 重置传感器选择
   }
-  
-  // 绘制时间轴标签
-  for (int i = 0; i <= 4; i++) {
-    int x = GRAPH_LEFT + (GRAPH_WIDTH * i / 4);
-    int minutes = (i * 30);
-    snprintf(graphState.lastTimeLabels[i], sizeof(graphState.lastTimeLabels[i]), "%dm", minutes);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(1);
-    tft.setTextDatum(TC_DATUM);
-    tft.drawString(graphState.lastTimeLabels[i], x, GRAPH_BOTTOM + 5);
-  }
+  firstDraw = true;
+  graphState.needsFullRedraw = true;
 }
 
-// 更新温度信息显示
-void updateTempInfo(float minTemp, float maxTemp, float avgTemp, float currentTemp) {
-  static char lastInfo[4][16] = {""};  // 存储上一次的信息文本
-  char currentInfo[4][16];
-  
-  // 准备新的信息文本
-  snprintf(currentInfo[0], sizeof(currentInfo[0]), "Max: %.1fC", maxTemp);
-  snprintf(currentInfo[1], sizeof(currentInfo[1]), "Min: %.1fC", minTemp);
-  snprintf(currentInfo[2], sizeof(currentInfo[2]), "Avg: %.1fC", avgTemp);
-  snprintf(currentInfo[3], sizeof(currentInfo[3]), "Now: %.1fC", currentTemp);
-  
-  // 只在文本变化时更新显示
-  for (int i = 0; i < 4; i++) {
-    if (strcmp(lastInfo[i], currentInfo[i]) != 0) {
-      // 清除旧文本区域
-      tft.fillRect(GRAPH_LEFT + 5, GRAPH_TOP + i * 10, 100, 10, TFT_BLACK);
-      
-      // 绘制新文本
-      tft.setTextColor(i == 3 ? TFT_GREEN : TFT_WHITE, TFT_BLACK);
-      tft.setTextSize(1);
-      tft.setTextDatum(TL_DATUM);
-      tft.drawString(currentInfo[i], GRAPH_LEFT + 5, GRAPH_TOP + i * 10);
-      
-      // 更新存储的文本
-      strcpy(lastInfo[i], currentInfo[i]);
+void onButton2Click() {
+  if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
+    if (selectedSensor > 0) {
+      selectedSensor--;
+      firstDraw = true;
+      graphState.needsFullRedraw = true;
+      Serial.print("Button2: 切换到传感器 ");
+      Serial.println(selectedSensor);
     }
   }
 }
 
-// 绘制折线图
-void drawGraph(int sensorIndex) {
-  static int lastSensorIndex = -1;
-  bool forceRedraw = firstDraw || (lastSensorIndex != sensorIndex);
-  
-  // 检查是否需要完全重绘
-  if (forceRedraw || graphState.needsFullRedraw) {
-    drawGraphBackground();
-    graphState.needsFullRedraw = false;
-    lastSensorIndex = sensorIndex;
-  }
-  
-  // 计算温度范围
-  float minTemp = 100.0;
-  float maxTemp = -100.0;
-  float sumTemp = 0.0;
-  int validCount = 0;
-  
-  for (int i = 0; i < sensorRecords[sensorIndex].recordCount; i++) {
-    float temp = sensorRecords[sensorIndex].temps[i];
-    if (temp != DEVICE_DISCONNECTED_C) {
-      if (temp < minTemp) minTemp = temp;
-      if (temp > maxTemp) maxTemp = temp;
-      sumTemp += temp;
-      validCount++;
+void onButton3Click() {
+  if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
+    if (selectedSensor < totalSensors-1) {
+      selectedSensor++;
+      firstDraw = true;
+      graphState.needsFullRedraw = true;
+      Serial.print("Button3: 切换到传感器 ");
+      Serial.println(selectedSensor);
     }
   }
-  
-  // 添加边距并确保最小范围
-  float tempRange = maxTemp - minTemp;
-  if (tempRange < 1.0) tempRange = 1.0;
-  minTemp -= tempRange * 0.1;
-  maxTemp += tempRange * 0.1;
-  
-  // 计算平均温度
-  float avgTemp = validCount > 0 ? sumTemp / validCount : 0;
-  float currentTemp = sensors.getTempCByIndex(sensorIndex);
-  
-  // 检查是否需要更新温度信息
-  if (forceRedraw || 
-      abs(minTemp - graphState.lastMinTemp) > 0.1 ||
-      abs(maxTemp - graphState.lastMaxTemp) > 0.1 ||
-      abs(avgTemp - graphState.lastAvgTemp) > 0.1 ||
-      abs(currentTemp - graphState.lastCurrentTemp) > 0.1) {
-    
-    updateTempInfo(minTemp, maxTemp, avgTemp, currentTemp);
-    
-    // 更新状态
-    graphState.lastMinTemp = minTemp;
-    graphState.lastMaxTemp = maxTemp;
-    graphState.lastAvgTemp = avgTemp;
-    graphState.lastCurrentTemp = currentTemp;
-  }
-  
-  // 只在记录数量变化或强制重绘时更新曲线
-  if (forceRedraw || sensorRecords[sensorIndex].recordCount != graphState.lastRecordCount) {
-    // 清除旧的曲线
-    tft.fillRect(GRAPH_LEFT + 1, GRAPH_TOP + 1, GRAPH_WIDTH - 2, GRAPH_HEIGHT - 2, TFT_BLACK);
-    
-    // 绘制新的温度曲线
-    if (sensorRecords[sensorIndex].recordCount > 1) {
-      for (int i = 1; i < sensorRecords[sensorIndex].recordCount; i++) {
-        int x1 = GRAPH_LEFT + ((i-1) * GRAPH_WIDTH / (MAX_RECORDS-1));
-        int x2 = GRAPH_LEFT + (i * GRAPH_WIDTH / (MAX_RECORDS-1));
-        
-        float temp1 = sensorRecords[sensorIndex].temps[(sensorRecords[sensorIndex].currentIndex - sensorRecords[sensorIndex].recordCount + i-1 + MAX_RECORDS) % MAX_RECORDS];
-        float temp2 = sensorRecords[sensorIndex].temps[(sensorRecords[sensorIndex].currentIndex - sensorRecords[sensorIndex].recordCount + i + MAX_RECORDS) % MAX_RECORDS];
-        
-        if (temp1 != DEVICE_DISCONNECTED_C && temp2 != DEVICE_DISCONNECTED_C) {
-          int y1 = GRAPH_TOP + GRAPH_HEIGHT - ((temp1 - minTemp) * GRAPH_HEIGHT / (maxTemp - minTemp));
-          int y2 = GRAPH_TOP + GRAPH_HEIGHT - ((temp2 - minTemp) * GRAPH_HEIGHT / (maxTemp - minTemp));
-          
-          tft.drawLine(x1, y1, x2, y2, TFT_GREEN);
-        }
-      }
-    }
-    
-    graphState.lastRecordCount = sensorRecords[sensorIndex].recordCount;
-  }
-  
-  firstDraw = false;
 }
 
 void setup() {
@@ -394,7 +450,7 @@ void setup() {
   
   // 初始化显示屏
   tft.init();
-  tft.initDMA();
+  tft.initDMA();  // 启用DMA加速
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
   
@@ -405,8 +461,6 @@ void setup() {
   // 获取传感器数量
   sensors.requestTemperatures();
   totalSensors = sensors.getDeviceCount();
-  
-  firstDraw = true;
   
   // 初始化温度记录
   for (int i = 0; i < 16; i++) {
@@ -421,6 +475,16 @@ void setup() {
   graphState.lastCurrentTemp = 0;
   graphState.lastRecordCount = 0;
   graphState.needsFullRedraw = true;
+  
+  // 初始化报警状态
+  for (int i = 0; i < 16; i++) {
+    alarmStates[i].highAlarm = false;
+    alarmStates[i].lowAlarm = false;
+    alarmStates[i].lastBlinkTime = 0;
+    alarmStates[i].blinkState = false;
+  }
+  
+  firstDraw = true;
 }
 
 void loop() {
@@ -428,6 +492,16 @@ void loop() {
   button1.tick();
   button2.tick();
   button3.tick();
+  
+  // 添加调试信息
+  static unsigned long lastDebugTime = 0;
+  if (millis() - lastDebugTime >= 1000) {  // 每秒打印一次状态
+    Serial.print("当前模式: ");
+    Serial.print(currentMode);
+    Serial.print(", 选中传感器: ");
+    Serial.println(selectedSensor);
+    lastDebugTime = millis();
+  }
   
   // 更新温度记录
   updateTempRecords();
@@ -451,5 +525,24 @@ void loop() {
       break;
   }
   
-  delay(5);  // 减少主循环延时
+  delay(5);
 }
+
+// 添加报警检查函数
+void checkTemperatureAlarms(int sensorIndex, float temp) {
+  if (temp == DEVICE_DISCONNECTED_C) return;
+  
+  AlarmState &alarm = alarmStates[sensorIndex];
+  alarm.highAlarm = (temp >= TEMP_ALARM_HIGH);
+  alarm.lowAlarm = (temp <= TEMP_ALARM_LOW);
+  
+  // 更新闪烁状态
+  if (alarm.highAlarm || alarm.lowAlarm) {
+    if (millis() - alarm.lastBlinkTime >= ALARM_BLINK_INTERVAL) {
+      alarm.blinkState = !alarm.blinkState;
+      alarm.lastBlinkTime = millis();
+    }
+  } else {
+    alarm.blinkState = false;
+  }
+} 
