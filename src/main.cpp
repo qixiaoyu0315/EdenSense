@@ -207,11 +207,11 @@ void drawGraph(int sensorIndex) {
     // 清除整个屏幕
     tft.fillScreen(TFT_BLACK);
     
-    // 显示当前传感器编号（从1开始）
+    // 显示当前传感器编号（T1, T2格式）
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("传感器 " + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
+    tft.drawString("T" + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
     
     drawGraphBackground(sensorIndex);
     lastSensorIndex = sensorIndex;
@@ -326,7 +326,8 @@ void displayOverview() {
   // 检查每个传感器的状态是否发生变化
   for (int i = 0; i < totalSensors; i++) {
     float tempC = sensors.getTempCByIndex(i);
-    if (tempC != displayState.lastTemps[i] ||
+    // 添加温度变化检测的容差，避免小数点波动导致频繁刷新
+    if (abs(tempC - displayState.lastTemps[i]) >= 0.1 ||
         alarmStates[i].highAlarm != displayState.lastAlarmStates[i][0] ||
         alarmStates[i].lowAlarm != displayState.lastAlarmStates[i][1]) {
       needsRedraw = true;
@@ -361,11 +362,11 @@ void displayOverview() {
     displayState.lastAlarmStates[i][0] = alarmStates[i].highAlarm;
     displayState.lastAlarmStates[i][1] = alarmStates[i].lowAlarm;
     
-    // 显示传感器编号（从1开始）
+    // 显示传感器编号（T1, T2格式）
     tft.setTextSize(OVERVIEW_SENSOR_SIZE);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(TL_DATUM);
-    tft.drawString("传感器 " + String(i + 1), 5, rowY);
+    tft.drawString("T" + String(i + 1), 5, rowY);
     
     // 显示温度值
     if (tempC != DEVICE_DISCONNECTED_C) {
@@ -399,7 +400,8 @@ void displayDetailView(int sensorIndex) {
                     displayState.lastSelectedSensor != sensorIndex;
   
   float tempC = sensors.getTempCByIndex(sensorIndex);
-  if (tempC != displayState.lastTemps[sensorIndex] ||
+  // 添加温度变化检测的容差
+  if (abs(tempC - displayState.lastTemps[sensorIndex]) >= 0.1 ||
       alarmStates[sensorIndex].highAlarm != displayState.lastAlarmStates[sensorIndex][0] ||
       alarmStates[sensorIndex].lowAlarm != displayState.lastAlarmStates[sensorIndex][1]) {
     needsRedraw = true;
@@ -412,11 +414,11 @@ void displayDetailView(int sensorIndex) {
   // 清除屏幕
   tft.fillScreen(TFT_BLACK);
   
-  // 显示传感器编号（从1开始）
+  // 显示传感器编号（T1, T2格式）
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(1);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("传感器 " + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
+  tft.drawString("T" + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
   
   // 更新状态记录
   displayState.lastTemps[sensorIndex] = tempC;
@@ -595,7 +597,7 @@ void setup() {
 }
 
 void loop() {
-  // 更新按钮状态
+  // 更新按键状态
   button1.tick();
   button2.tick();
   button3.tick();
@@ -606,32 +608,53 @@ void loop() {
     return;
   }
   
-  // 更新温度记录
-  updateTempRecords();
+  // 定期更新温度
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastTempUpdate >= tempUpdateInterval) {
+    // 请求所有传感器更新温度
+    sensors.requestTemperatures();
+    
+    // 更新温度记录
+    updateTempRecords();
+    
+    // 检查所有传感器的温度报警状态
+    for (int i = 0; i < totalSensors; i++) {
+      float tempC = sensors.getTempCByIndex(i);
+      if (tempC != DEVICE_DISCONNECTED_C) {
+        checkTemperatureAlarms(i, tempC);
+      }
+    }
+    
+    // 根据当前模式更新显示
+    switch (currentMode) {
+      case MODE_OVERVIEW:
+        displayOverview();
+        break;
+      case MODE_DETAIL:
+        if (selectedSensor >= 0 && selectedSensor < totalSensors) {
+          displayDetailView(selectedSensor);
+        }
+        break;
+      case MODE_GRAPH:
+        if (selectedSensor >= 0 && selectedSensor < totalSensors) {
+          drawGraph(selectedSensor);
+        }
+        break;
+    }
+    
+    lastTempUpdate = currentMillis;
+  }
   
-  // 检查温度报警
+  // 处理报警闪烁
   for (int i = 0; i < totalSensors; i++) {
-    float temp = sensors.getTempCByIndex(i);
-    if (temp != DEVICE_DISCONNECTED_C) {
-      checkTemperatureAlarms(i, temp);
+    if (alarmStates[i].highAlarm || alarmStates[i].lowAlarm) {
+      if (currentMillis - alarmStates[i].lastBlinkTime >= ALARM_BLINK_INTERVAL) {
+        alarmStates[i].blinkState = !alarmStates[i].blinkState;
+        alarmStates[i].lastBlinkTime = currentMillis;
+        displayState.needsRedraw = true;  // 触发重绘以更新报警状态显示
+      }
     }
   }
-  
-  // 根据当前模式更新显示
-  switch(currentMode) {
-    case MODE_OVERVIEW:
-      displayOverview();
-      break;
-    case MODE_DETAIL:
-      displayDetailView(selectedSensor);
-      break;
-    case MODE_GRAPH:
-      drawGraph(selectedSensor);
-      break;
-  }
-  
-  // 控制刷新率
-  delay(50);
 }
 
 // 添加报警检查函数
