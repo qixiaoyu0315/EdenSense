@@ -16,16 +16,19 @@
 #define ONEWIRE_BUS 4    // 使用GPIO4作为数据线
 
 // 图表相关定义
-#define GRAPH_HEIGHT 120    // 图表高度
-#define GRAPH_WIDTH 240     // 图表宽度
-#define GRAPH_TOP 40        // 图表顶部位置
-#define GRAPH_LEFT 0        // 图表左侧位置
-#define INFO_HEIGHT 35      // 信息显示区域高度
+#define SCREEN_WIDTH 128    // 屏幕宽度
+#define SCREEN_HEIGHT 128   // 屏幕高度
+#define GRAPH_HEIGHT 80     // 图表高度（调整以适应小屏幕）
+#define GRAPH_WIDTH 124     // 图表宽度（考虑右侧4像素）
+#define GRAPH_TOP 25        // 图表顶部位置（调整以适应小屏幕）
+#define GRAPH_LEFT 2        // 图表左侧位置（考虑左侧2像素）
+#define INFO_HEIGHT 20      // 信息显示区域高度（调整以适应小屏幕）
 #define GRAPH_BOTTOM (GRAPH_TOP + GRAPH_HEIGHT)  // 图表底部位置
+#define INFO_TOP (GRAPH_BOTTOM + 2)  // 信息显示区域顶部位置（考虑底部2像素）
 
 // 温度记录相关定义
 #define MAX_RECORDS 144  // 存储144个数据点
-#define RECORD_INTERVAL 600  // 记录间隔（秒）
+#define RECORD_INTERVAL 10  // 记录间隔（秒），从600改为10秒用于测试
 
 // 温度报警相关定义
 #define TEMP_ALARM_HIGH 30.0  // 高温报警阈值
@@ -199,10 +202,10 @@ void drawGraph(int sensorIndex) {
   
   // 添加调试信息
   if (lastSensorIndex != sensorIndex) {
-    Serial.print("传感器切换: ");
-    Serial.print(lastSensorIndex);
-    Serial.print(" -> ");
-    Serial.println(sensorIndex);
+    Serial.print("切换到传感器 ");
+    Serial.print(sensorIndex);
+    Serial.print(", 当前记录数: ");
+    Serial.println(sensorRecords[sensorIndex].recordCount);
   }
   
   if (needsFullRedraw) {
@@ -211,9 +214,9 @@ void drawGraph(int sensorIndex) {
     
     // 显示当前传感器编号
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(2);
+    tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("T" + String(sensorIndex + 1), tft.width()/2, 20);
+    tft.drawString("T" + String(sensorIndex + 1), SCREEN_WIDTH/2, 12);
     
     drawGraphBackground(sensorIndex);
     lastSensorIndex = sensorIndex;
@@ -247,6 +250,20 @@ void drawGraph(int sensorIndex) {
   
   float avgTemp = validCount > 0 ? sumTemp / validCount : 0;
   
+  // 打印图表数据信息
+  if (sensorRecords[sensorIndex].recordCount > 0) {
+    Serial.print("图表数据 - 传感器 ");
+    Serial.print(sensorIndex);
+    Serial.print(": 记录数=");
+    Serial.print(sensorRecords[sensorIndex].recordCount);
+    Serial.print(", 最小值=");
+    Serial.print(minTemp);
+    Serial.print(", 最大值=");
+    Serial.print(maxTemp);
+    Serial.print(", 平均值=");
+    Serial.println(avgTemp);
+  }
+  
   // 检查是否需要更新温度信息
   bool needsInfoUpdate = needsFullRedraw ||
                         (abs(minTemp - lastMinTemp) >= 0.1) ||
@@ -274,6 +291,14 @@ void drawGraph(int sensorIndex) {
     float tempRange = maxTemp - minTemp;
     if (tempRange < 1.0) tempRange = 1.0;  // 确保有最小范围
     
+    // 打印绘图信息
+    Serial.print("绘制图表 - 温度范围: ");
+    Serial.print(minTemp);
+    Serial.print(" 到 ");
+    Serial.print(maxTemp);
+    Serial.print(", 数据点数: ");
+    Serial.println(sensorRecords[sensorIndex].recordCount);
+    
     // 绘制数据点
     for (int i = 1; i < sensorRecords[sensorIndex].recordCount; i++) {
       float temp1 = sensorRecords[sensorIndex].temps[i-1];
@@ -285,6 +310,17 @@ void drawGraph(int sensorIndex) {
         int x2 = GRAPH_LEFT + (i * GRAPH_WIDTH / (MAX_RECORDS - 1));
         int y1 = GRAPH_TOP + GRAPH_HEIGHT - ((temp1 - minTemp) * GRAPH_HEIGHT / tempRange);
         int y2 = GRAPH_TOP + GRAPH_HEIGHT - ((temp2 - minTemp) * GRAPH_HEIGHT / tempRange);
+        
+        // 打印坐标信息
+        Serial.print("绘制线段: (");
+        Serial.print(x1);
+        Serial.print(",");
+        Serial.print(y1);
+        Serial.print(") -> (");
+        Serial.print(x2);
+        Serial.print(",");
+        Serial.print(y2);
+        Serial.println(")");
         
         // 绘制线段
         tft.drawLine(x1, y1, x2, y2, TFT_GREEN);
@@ -403,14 +439,25 @@ void updateTempRecords() {
   static unsigned long lastRecordTime = 0;
   unsigned long currentTime = millis();
   
-  // 检查是否需要记录新数据（每10分钟记录一次）
+  // 检查是否需要记录新数据
   if (currentTime - lastRecordTime >= (RECORD_INTERVAL * 1000)) {
+    Serial.println("开始记录温度数据...");
     for (int i = 0; i < totalSensors; i++) {
       float tempC = sensors.getTempCByIndex(i);
       if (tempC != DEVICE_DISCONNECTED_C) {
         // 更新记录
         sensorRecords[i].temps[sensorRecords[i].currentIndex] = tempC;
         sensorRecords[i].timestamps[sensorRecords[i].currentIndex] = currentTime;
+        
+        // 打印记录信息
+        Serial.print("传感器 ");
+        Serial.print(i);
+        Serial.print(" 记录温度: ");
+        Serial.print(tempC);
+        Serial.print("C, 记录位置: ");
+        Serial.print(sensorRecords[i].currentIndex);
+        Serial.print(", 总记录数: ");
+        Serial.println(sensorRecords[i].recordCount);
         
         // 更新索引和计数
         sensorRecords[i].currentIndex = (sensorRecords[i].currentIndex + 1) % MAX_RECORDS;
@@ -420,6 +467,7 @@ void updateTempRecords() {
       }
     }
     lastRecordTime = currentTime;
+    Serial.println("温度数据记录完成");
   }
 }
 
