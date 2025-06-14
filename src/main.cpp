@@ -20,12 +20,19 @@
 #define SCREEN_HEIGHT 128  // 屏幕高度
 #define TITLE_HEIGHT 12    // 标题区域高度
 #define TEMP_INFO_HEIGHT 20  // 温度信息显示区域高度
+
+// 图表显示参数
 #define GRAPH_HEIGHT 80    // 图表高度
 #define GRAPH_WIDTH 120    // 图表宽度
-#define GRAPH_LEFT 9      // 图表左边距，为温度刻度值留出空间
+#define GRAPH_LEFT 9       // 图表左边距
+#define TEMP_SCALE_WIDTH 8  // 温度刻度值显示区域宽度
 #define GRAPH_TOP (TITLE_HEIGHT + TEMP_INFO_HEIGHT)  // 图表顶部位置
 #define INFO_TOP (TITLE_HEIGHT + 2)  // 温度信息显示区域顶部位置
-#define TEMP_SCALE_WIDTH 8  // 温度刻度值显示区域宽度
+
+// 概览模式布局参数
+#define OVERVIEW_ROW_HEIGHT 30  // 每行高度
+#define OVERVIEW_TEMP_SIZE 2    // 温度字体大小
+#define OVERVIEW_SENSOR_SIZE 1  // 传感器编号字体大小
 
 // 温度记录相关定义
 #define MAX_RECORDS 120  // 修改为120个数据点
@@ -74,6 +81,15 @@ struct AlarmState {
   bool blinkState;
 };
 
+// 添加显示状态结构
+struct DisplayState {
+  bool needsRedraw;  // 是否需要重绘
+  int lastSelectedSensor;  // 上次选择的传感器
+  DisplayMode lastMode;  // 上次的显示模式
+  float lastTemps[16];  // 上次显示的温度值
+  bool lastAlarmStates[16][2];  // 上次的报警状态 [传感器][高温/低温]
+};
+
 // 全局变量定义
 int selectedSensor = -1;      // 当前选择的传感器，-1表示显示所有
 int totalSensors = 0;         // 总传感器数量
@@ -88,6 +104,7 @@ TempRecord sensorRecords[16];  // 假设最多16个传感器
 GraphState graphState = {0};   // 图表状态
 AlarmState alarmStates[16];  // 每个传感器的报警状态
 bool screenOn = true;  // 屏幕开关状态
+DisplayState displayState = {false, -1, MODE_OVERVIEW, {0}, {{false}}};
 
 // 全局对象定义
 TFT_eSPI tft;
@@ -190,11 +207,11 @@ void drawGraph(int sensorIndex) {
     // 清除整个屏幕
     tft.fillScreen(TFT_BLACK);
     
-    // 显示当前传感器编号
+    // 显示当前传感器编号（从1开始）
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("T" + String(sensorIndex + 1), SCREEN_WIDTH/2, 12);
+    tft.drawString("传感器 " + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
     
     drawGraphBackground(sensorIndex);
     lastSensorIndex = sensorIndex;
@@ -263,8 +280,9 @@ void drawGraph(int sensorIndex) {
   
   if (needsGraphUpdate) {
     // 清除旧图表（包括温度刻度值区域）
-    tft.fillRect(GRAPH_LEFT - TEMP_SCALE_WIDTH, GRAPH_TOP + 1, 
-                 GRAPH_WIDTH + TEMP_SCALE_WIDTH - 1, GRAPH_HEIGHT - 2, TFT_BLACK);
+    int clearLeft = GRAPH_LEFT - TEMP_SCALE_WIDTH;
+    int clearWidth = GRAPH_WIDTH + TEMP_SCALE_WIDTH - 1;
+    tft.fillRect(clearLeft, GRAPH_TOP + 1, clearWidth, GRAPH_HEIGHT - 2, TFT_BLACK);
     
     // 重新绘制网格线和刻度值
     drawGraphBackground(sensorIndex);
@@ -301,101 +319,141 @@ void drawGraph(int sensorIndex) {
 }
 
 void displayOverview() {
-  static bool firstOverview = true;
-  bool forceRedraw = firstDraw || firstOverview;
+  // 检查是否需要重绘
+  bool needsRedraw = displayState.needsRedraw || 
+                    displayState.lastMode != currentMode;
   
-  if (forceRedraw) {
-    tft.fillScreen(TFT_BLACK);
-    firstOverview = false;
-  }
-  
-  // 显示所有传感器数据
-  for(int i = 0; i < totalSensors; i++) {
+  // 检查每个传感器的状态是否发生变化
+  for (int i = 0; i < totalSensors; i++) {
     float tempC = sensors.getTempCByIndex(i);
-    int yPos = 20 + i * 25;
-    
-    // 检查温度报警
-    checkTemperatureAlarms(i, tempC);
-    
-    // 只在温度变化或首次显示时更新
-    if (forceRedraw || abs(tempC - lastTemps[i]) >= 0.1) {
-      // 清除该行显示区域
-      tft.fillRect(5, yPos-15, tft.width()-10, 20, TFT_BLACK);
-      
-      if(tempC != DEVICE_DISCONNECTED_C) {
-        // 根据报警状态选择颜色
-        uint16_t textColor = TFT_GREEN;
-        if (alarmStates[i].highAlarm && alarmStates[i].blinkState) {
-          textColor = TFT_RED;
-        } else if (alarmStates[i].lowAlarm && alarmStates[i].blinkState) {
-          textColor = TFT_BLUE;
-        }
-        
-        tft.setTextColor(textColor, TFT_BLACK);
-        String tempStr = "T" + String(i + 1) + ": " + String(tempC, 1) + "C";
-        tft.drawString(tempStr, 10, yPos);
-        lastTemps[i] = tempC;
-      } else if (forceRedraw) {
-        tft.setTextColor(TFT_RED, TFT_BLACK);
-        tft.drawString("T" + String(i + 1) + ": 未连接", 10, yPos);
-      }
+    if (tempC != displayState.lastTemps[i] ||
+        alarmStates[i].highAlarm != displayState.lastAlarmStates[i][0] ||
+        alarmStates[i].lowAlarm != displayState.lastAlarmStates[i][1]) {
+      needsRedraw = true;
+      break;
     }
   }
   
-  firstDraw = false;
+  if (!needsRedraw) {
+    return;  // 如果没有变化，不进行重绘
+  }
+  
+  // 清除屏幕
+  tft.fillScreen(TFT_BLACK);
+  
+  // 显示标题
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("温度概览", SCREEN_WIDTH/2, TITLE_HEIGHT/2);
+  
+  // 计算每行的高度和起始位置
+  int rowHeight = OVERVIEW_ROW_HEIGHT;
+  int startY = TITLE_HEIGHT + 5;  // 标题下方留出5像素间距
+  
+  // 显示所有传感器温度
+  for (int i = 0; i < totalSensors; i++) {
+    float tempC = sensors.getTempCByIndex(i);
+    int rowY = startY + (i * rowHeight);
+    
+    // 更新状态记录
+    displayState.lastTemps[i] = tempC;
+    displayState.lastAlarmStates[i][0] = alarmStates[i].highAlarm;
+    displayState.lastAlarmStates[i][1] = alarmStates[i].lowAlarm;
+    
+    // 显示传感器编号（从1开始）
+    tft.setTextSize(OVERVIEW_SENSOR_SIZE);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextDatum(TL_DATUM);
+    tft.drawString("传感器 " + String(i + 1), 5, rowY);
+    
+    // 显示温度值
+    if (tempC != DEVICE_DISCONNECTED_C) {
+      tft.setTextSize(OVERVIEW_TEMP_SIZE);
+      // 根据报警状态设置颜色
+      if (alarmStates[i].highAlarm) {
+        tft.setTextColor(TFT_RED, TFT_BLACK);
+      } else if (alarmStates[i].lowAlarm) {
+        tft.setTextColor(TFT_BLUE, TFT_BLACK);
+      } else {
+        tft.setTextColor(TFT_GREEN, TFT_BLACK);
+      }
+      tft.setTextDatum(TR_DATUM);
+      tft.drawString(String(tempC, 1) + "C", SCREEN_WIDTH - 5, rowY);
+    } else {
+      tft.setTextSize(OVERVIEW_TEMP_SIZE);
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.setTextDatum(TR_DATUM);
+      tft.drawString("未连接", SCREEN_WIDTH - 5, rowY);
+    }
+  }
+  
+  displayState.lastMode = currentMode;
+  displayState.needsRedraw = false;
 }
 
-void displayDetailView(int index) {
-  static int lastIndex = -1;
-  static float lastTemp = -999;
-  bool forceRedraw = firstDraw || (lastIndex != index);
+void displayDetailView(int sensorIndex) {
+  // 检查是否需要重绘
+  bool needsRedraw = displayState.needsRedraw || 
+                    displayState.lastMode != currentMode ||
+                    displayState.lastSelectedSensor != sensorIndex;
   
-  if (forceRedraw) {
-    tft.fillScreen(TFT_BLACK);
-    lastIndex = index;
+  float tempC = sensors.getTempCByIndex(sensorIndex);
+  if (tempC != displayState.lastTemps[sensorIndex] ||
+      alarmStates[sensorIndex].highAlarm != displayState.lastAlarmStates[sensorIndex][0] ||
+      alarmStates[sensorIndex].lowAlarm != displayState.lastAlarmStates[sensorIndex][1]) {
+    needsRedraw = true;
   }
   
-  float tempC = sensors.getTempCByIndex(index);
-  checkTemperatureAlarms(index, tempC);
+  if (!needsRedraw) {
+    return;  // 如果没有变化，不进行重绘
+  }
   
-  if (forceRedraw) {
-    // 显示传感器编号
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(2);
+  // 清除屏幕
+  tft.fillScreen(TFT_BLACK);
+  
+  // 显示传感器编号（从1开始）
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("传感器 " + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
+  
+  // 更新状态记录
+  displayState.lastTemps[sensorIndex] = tempC;
+  displayState.lastAlarmStates[sensorIndex][0] = alarmStates[sensorIndex].highAlarm;
+  displayState.lastAlarmStates[sensorIndex][1] = alarmStates[sensorIndex].lowAlarm;
+  displayState.lastSelectedSensor = sensorIndex;
+  
+  if (tempC != DEVICE_DISCONNECTED_C) {
+    // 显示温度值
+    tft.setTextSize(3);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("T" + String(index + 1), tft.width()/2, 30);
-  }
-  
-  if (tempC != DEVICE_DISCONNECTED_C && (forceRedraw || abs(tempC - lastTemp) >= 0.1)) {
-    // 清除旧温度显示区域
-    tft.fillRect(0, 50, tft.width(), 60, TFT_BLACK);
+    tft.drawString(String(tempC, 1) + "C", SCREEN_WIDTH/2, 60);
     
-    // 根据报警状态选择颜色
-    uint16_t textColor = TFT_GREEN;
-    if (alarmStates[index].highAlarm && alarmStates[index].blinkState) {
-      textColor = TFT_RED;
-    } else if (alarmStates[index].lowAlarm && alarmStates[index].blinkState) {
-      textColor = TFT_BLUE;
+    // 显示报警状态
+    tft.setTextSize(1);
+    if (alarmStates[sensorIndex].highAlarm) {
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.drawString("高温报警", SCREEN_WIDTH/2, 90);
+    } else if (alarmStates[sensorIndex].lowAlarm) {
+      tft.setTextColor(TFT_BLUE, TFT_BLACK);
+      tft.drawString("低温报警", SCREEN_WIDTH/2, 90);
+    } else {
+      tft.setTextColor(TFT_GREEN, TFT_BLACK);
+      tft.drawString("正常", SCREEN_WIDTH/2, 90);
     }
     
-    // 显示新温度
-    tft.setTextSize(4);
-    tft.setTextColor(textColor, TFT_BLACK);
-    tft.drawString(String(tempC, 1), tft.width()/2, 80);
-    
-    // 显示摄氏度符号
-    tft.setTextSize(2);
-    tft.drawString("C", tft.width()/2 + 60, 80);
-    
-    lastTemp = tempC;
-  } else if (tempC == DEVICE_DISCONNECTED_C && forceRedraw) {
-    tft.fillRect(0, 50, tft.width(), 60, TFT_BLACK);
-    tft.setTextSize(2);
+    // 显示报警阈值
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("高温阈值: " + String(TEMP_ALARM_HIGH, 1) + "C", SCREEN_WIDTH/2, 110);
+    tft.drawString("低温阈值: " + String(TEMP_ALARM_LOW, 1) + "C", SCREEN_WIDTH/2, 120);
+  } else {
     tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.drawString("未连接", tft.width()/2, 80);
+    tft.drawString("传感器未连接", SCREEN_WIDTH/2, 60);
   }
   
-  firstDraw = false;
+  displayState.lastMode = currentMode;
+  displayState.needsRedraw = false;
 }
 
 void updateTempRecords() {
@@ -434,48 +492,42 @@ void updateTempRecords() {
   }
 }
 
-// 修改按键回调函数实现
+// 修改按钮回调函数
 void onButton1Click() {
+  currentMode = (DisplayMode)((currentMode + 1) % 3);
   if (currentMode == MODE_OVERVIEW) {
-    currentMode = MODE_DETAIL;
-    selectedSensor = 0;  // 从第一个传感器开始
-  } else if (currentMode == MODE_DETAIL) {
-    currentMode = MODE_GRAPH;
-    // 保持在当前选中的传感器
-  } else {
-    currentMode = MODE_OVERVIEW;
-    selectedSensor = -1;  // 重置传感器选择
+    selectedSensor = -1;  // 概览模式不选择具体传感器
+  } else if (selectedSensor == -1) {
+    selectedSensor = 0;  // 如果从概览模式切换过来，默认选择第一个传感器
   }
-  firstDraw = true;
-  graphState.needsFullRedraw = true;
+  displayState.needsRedraw = true;
+  Serial.print("切换到模式: ");
+  Serial.println(currentMode);
 }
 
 void onButton2Click() {
-  if (currentMode == MODE_OVERVIEW) {
-    currentMode = MODE_DETAIL;
-    Serial.println("切换到详细模式");
-  } else if (currentMode == MODE_DETAIL) {
-    currentMode = MODE_GRAPH;
-    Serial.println("切换到图表模式");
-  } else {
-    currentMode = MODE_OVERVIEW;
-    Serial.println("切换到概览模式");
+  if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
+    if (selectedSensor == -1) {
+      selectedSensor = 0;
+    } else {
+      selectedSensor = (selectedSensor + 1) % totalSensors;
+    }
+    displayState.needsRedraw = true;
+    Serial.print("选择传感器: ");
+    Serial.println(selectedSensor + 1);  // 显示从1开始的编号
   }
-  graphState.needsFullRedraw = true;  // 确保模式切换时重绘
 }
 
 void onButton3Click() {
   if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
-    // 循环切换到下一个传感器
-    if (selectedSensor < totalSensors - 1) {
-      selectedSensor++;
+    if (selectedSensor == -1) {
+      selectedSensor = totalSensors - 1;
     } else {
-      selectedSensor = 0;  // 如果是最后一个，则跳转到第一个
+      selectedSensor = (selectedSensor - 1 + totalSensors) % totalSensors;
     }
-    firstDraw = true;
-    graphState.needsFullRedraw = true;
-    Serial.print("Button3: 切换到传感器 ");
-    Serial.println(selectedSensor);
+    displayState.needsRedraw = true;
+    Serial.print("选择传感器: ");
+    Serial.println(selectedSensor + 1);  // 显示从1开始的编号
   }
 }
 
@@ -497,66 +549,49 @@ void onButton4Click() {
 }
 
 void setup() {
-  // 初始化串口
   Serial.begin(115200);
+  Serial.println("EdenSense 温度监控系统启动...");
   
-  // 配置按键回调函数
-  button1.attachClick(onButton1Click);
-  button2.attachClick(onButton2Click);
-  button3.attachClick(onButton3Click);
-  button4.attachClick(onButton4Click);
+  // 初始化显示屏
+  tft.init();
+  tft.setRotation(0);  // 旋转180度 (0-3: 0°, 90°, 180°, 270°)
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
   
   // 初始化背光控制
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);  // 默认开启背光
   
-  // 初始化显示屏
-  tft.init();
-  tft.initDMA();
-  tft.setRotation(0);
-  tft.fillScreen(TFT_BLACK);
+  // 初始化按键
+  button1.attachClick(onButton1Click);
+  button2.attachClick(onButton2Click);
+  button3.attachClick(onButton3Click);
+  button4.attachClick(onButton4Click);
   
-  // 设置显示屏参数
-  tft.writecommand(0x36);  // 设置显示方向
-  tft.writedata(0x00);     // 正常方向
-  
-  tft.writecommand(0x3A);  // 设置像素格式
-  tft.writedata(0x05);     // 16位/像素
-  
-  tft.writecommand(0x29);  // 开启显示
-  digitalWrite(TFT_BL, HIGH);  // 默认开启背光
-  
-  // 初始化传感器
+  // 初始化温度传感器
   sensors.begin();
-  delay(1000);
-  
-  // 获取传感器数量
-  sensors.requestTemperatures();
   totalSensors = sensors.getDeviceCount();
+  Serial.print("找到 ");
+  Serial.print(totalSensors);
+  Serial.println(" 个温度传感器");
   
-  // 初始化温度记录
-  for (int i = 0; i < 16; i++) {
+  // 初始化温度记录数组
+  for (int i = 0; i < totalSensors; i++) {
     sensorRecords[i].recordCount = 0;
     sensorRecords[i].currentIndex = 0;
   }
   
-  // 初始化图表状态
-  graphState.lastMinTemp = 0;
-  graphState.lastMaxTemp = 0;
-  graphState.lastAvgTemp = 0;
-  graphState.lastCurrentTemp = 0;
-  graphState.lastRecordCount = 0;
-  graphState.needsFullRedraw = true;
-  
-  // 初始化报警状态
-  for (int i = 0; i < 16; i++) {
-    alarmStates[i].highAlarm = false;
-    alarmStates[i].lowAlarm = false;
-    alarmStates[i].lastBlinkTime = 0;
-    alarmStates[i].blinkState = false;
+  // 初始化显示状态
+  displayState.lastMode = currentMode;
+  displayState.lastSelectedSensor = -1;
+  for (int i = 0; i < totalSensors; i++) {
+    displayState.lastTemps[i] = 0;
+    displayState.lastAlarmStates[i][0] = false;
+    displayState.lastAlarmStates[i][1] = false;
   }
   
-  firstDraw = true;
+  // 首次显示
+  displayState.needsRedraw = true;
 }
 
 void loop() {
