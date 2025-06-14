@@ -15,20 +15,25 @@
 // DS18B20引脚定义
 #define ONEWIRE_BUS 4    // 使用GPIO4作为数据线
 
-// 图表相关定义
-#define SCREEN_WIDTH 128    // 屏幕宽度
-#define SCREEN_HEIGHT 128   // 屏幕高度
-#define GRAPH_HEIGHT 80     // 图表高度（调整以适应小屏幕）
-#define GRAPH_WIDTH 124     // 图表宽度（考虑右侧4像素）
-#define GRAPH_TOP 25        // 图表顶部位置（调整以适应小屏幕）
-#define GRAPH_LEFT 2        // 图表左侧位置（考虑左侧2像素）
-#define INFO_HEIGHT 20      // 信息显示区域高度（调整以适应小屏幕）
-#define GRAPH_BOTTOM (GRAPH_TOP + GRAPH_HEIGHT)  // 图表底部位置
-#define INFO_TOP (GRAPH_BOTTOM + 2)  // 信息显示区域顶部位置（考虑底部2像素）
+// 显示布局参数
+#define SCREEN_WIDTH 128   // 屏幕宽度
+#define SCREEN_HEIGHT 128  // 屏幕高度
+#define TITLE_HEIGHT 12    // 标题区域高度
+#define TEMP_INFO_HEIGHT 20  // 温度信息显示区域高度
+#define GRAPH_HEIGHT 80    // 图表高度
+#define GRAPH_WIDTH 120    // 图表宽度
+#define GRAPH_LEFT 9      // 图表左边距，为温度刻度值留出空间
+#define GRAPH_TOP (TITLE_HEIGHT + TEMP_INFO_HEIGHT)  // 图表顶部位置
+#define INFO_TOP (TITLE_HEIGHT + 2)  // 温度信息显示区域顶部位置
+#define TEMP_SCALE_WIDTH 8  // 温度刻度值显示区域宽度
 
 // 温度记录相关定义
-#define MAX_RECORDS 144  // 存储144个数据点
-#define RECORD_INTERVAL 10  // 记录间隔（秒），从600改为10秒用于测试
+#define MAX_RECORDS 120  // 修改为120个数据点
+#define RECORD_INTERVAL 10  // 每10秒记录一次
+#define TEMP_MIN 10.0  // 最小温度刻度
+#define TEMP_MAX 45.0  // 最大温度刻度
+#define TEMP_STEP 5.0  // 温度刻度间隔
+#define GRID_X_SPACING 12  // 垂直网格线间距（像素）
 
 // 温度报警相关定义
 #define TEMP_ALARM_HIGH 30.0  // 高温报警阈值
@@ -105,86 +110,55 @@ void checkTemperatureAlarms(int sensorIndex, float temp);
 
 // 函数实现
 void drawGraphBackground(int sensorIndex) {
-  // 清除图表区域
-  tft.fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT, TFT_BLACK);
-  
-  // 绘制边框
+  // 绘制图表边框
   tft.drawRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT, TFT_WHITE);
   
-  // 绘制水平网格线
-  for (int i = 1; i < 4; i++) {
-    int y = GRAPH_TOP + (GRAPH_HEIGHT * i / 4);
-    tft.drawLine(GRAPH_LEFT, y, GRAPH_LEFT + GRAPH_WIDTH, y, TFT_DARKGREY);
-  }
-  
-  // 绘制垂直网格线
-  for (int i = 1; i < 4; i++) {
-    int x = GRAPH_LEFT + (GRAPH_WIDTH * i / 4);
-    tft.drawLine(x, GRAPH_TOP, x, GRAPH_TOP + GRAPH_HEIGHT, TFT_DARKGREY);
-  }
-  
-  // 绘制时间标签
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  // 设置温度刻度值文本属性
   tft.setTextSize(1);
-  tft.setTextDatum(TC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(TR_DATUM);  // 右对齐文本
   
-  // 获取当前时间
-  time_t now = time(nullptr);
-  struct tm* timeinfo = localtime(&now);
+  // 绘制水平温度刻度线和刻度值
+  for (float temp = TEMP_MIN; temp <= TEMP_MAX; temp += TEMP_STEP) {
+    int y = GRAPH_TOP + GRAPH_HEIGHT - ((temp - TEMP_MIN) * GRAPH_HEIGHT / (TEMP_MAX - TEMP_MIN));
+    // 绘制刻度线
+    tft.drawLine(GRAPH_LEFT, y, GRAPH_LEFT + GRAPH_WIDTH, y, TFT_DARKGREY);
+    // 绘制刻度值
+    tft.drawString(String(int(temp)), GRAPH_LEFT - 2, y);
+  }
   
-  // 计算时间间隔（分钟）
-  int interval = RECORD_INTERVAL / 60;  // 转换为分钟
-  
-  // 绘制5个时间标签
-  for (int i = 0; i < 5; i++) {
-    int x = GRAPH_LEFT + (GRAPH_WIDTH * i / 4);
-    time_t labelTime = now - (RECORD_INTERVAL * (3 - i));
-    struct tm* labelTimeInfo = localtime(&labelTime);
-    
-    char timeStr[8];
-    strftime(timeStr, sizeof(timeStr), "%H:%M", labelTimeInfo);
-    tft.drawString(timeStr, x, GRAPH_TOP + GRAPH_HEIGHT + 5);
-    
-    // 保存时间标签文本
-    strncpy(graphState.lastTimeLabels[i], timeStr, sizeof(graphState.lastTimeLabels[i]) - 1);
-    graphState.lastTimeLabels[i][sizeof(graphState.lastTimeLabels[i]) - 1] = '\0';
+  // 绘制垂直网格线（每12像素一条，共10条）
+  for (int x = GRAPH_LEFT; x <= GRAPH_LEFT + GRAPH_WIDTH; x += GRID_X_SPACING) {
+    tft.drawLine(x, GRAPH_TOP, x, GRAPH_TOP + GRAPH_HEIGHT, TFT_DARKGREY);
   }
 }
 
 void updateTempInfo(float minTemp, float maxTemp, float avgTemp, float currentTemp) {
-  static char lastInfo[4][16] = {""};  // 存储上一次的信息文本
-  char newInfo[4][16];  // 存储新的信息文本
+  // 清除温度信息显示区域
+  tft.fillRect(0, INFO_TOP, SCREEN_WIDTH, TEMP_INFO_HEIGHT - 2, TFT_BLACK);
   
-  // 格式化新的信息文本
-  snprintf(newInfo[0], sizeof(newInfo[0]), "最低: %.1fC", minTemp);
-  snprintf(newInfo[1], sizeof(newInfo[1]), "最高: %.1fC", maxTemp);
-  snprintf(newInfo[2], sizeof(newInfo[2]), "平均: %.1fC", avgTemp);
-  snprintf(newInfo[3], sizeof(newInfo[3]), "当前: %.1fC", currentTemp);
+  // 设置文本属性
+  tft.setTextSize(1);
+  tft.setTextDatum(TL_DATUM);
   
-  // 检查是否需要更新显示
-  bool needsUpdate = false;
-  for (int i = 0; i < 4; i++) {
-    if (strcmp(lastInfo[i], newInfo[i]) != 0) {
-      needsUpdate = true;
-      break;
-    }
-  }
+  // 计算每个温度值的显示位置
+  int x_spacing = SCREEN_WIDTH / 4;  // 将屏幕宽度平均分为4份
   
-  if (needsUpdate) {
-    // 清除信息显示区域
-    tft.fillRect(0, GRAPH_TOP + GRAPH_HEIGHT + 25, tft.width(), INFO_HEIGHT, TFT_BLACK);
-    
-    // 显示新的信息
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(1);
-    tft.setTextDatum(TL_DATUM);
-    
-    for (int i = 0; i < 4; i++) {
-      int y = GRAPH_TOP + GRAPH_HEIGHT + 25 + (i * 8);
-      tft.drawString(newInfo[i], 5, y);
-      strcpy(lastInfo[i], newInfo[i]);  // 更新存储的文本
-    }
-  }
+  // 显示当前温度（绿色）
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.drawString(String(currentTemp, 1), 2, INFO_TOP);
+  
+  // 显示平均温度（黄色）
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.drawString(String(avgTemp, 1), 2 + x_spacing, INFO_TOP);
+  
+  // 显示最大温度（红色）
+  tft.setTextColor(TFT_RED, TFT_BLACK);
+  tft.drawString(String(maxTemp, 1), 2 + x_spacing * 2, INFO_TOP);
+  
+  // 显示最小温度（蓝色）
+  tft.setTextColor(TFT_BLUE, TFT_BLACK);
+  tft.drawString(String(minTemp, 1), 2 + x_spacing * 3, INFO_TOP);
 }
 
 void drawGraph(int sensorIndex) {
@@ -284,20 +258,12 @@ void drawGraph(int sensorIndex) {
                          (sensorRecords[sensorIndex].recordCount != lastRecordCount);
   
   if (needsGraphUpdate) {
-    // 清除旧图表
-    tft.fillRect(GRAPH_LEFT + 1, GRAPH_TOP + 1, GRAPH_WIDTH - 2, GRAPH_HEIGHT - 2, TFT_BLACK);
+    // 清除旧图表（包括温度刻度值区域）
+    tft.fillRect(GRAPH_LEFT - TEMP_SCALE_WIDTH, GRAPH_TOP + 1, 
+                 GRAPH_WIDTH + TEMP_SCALE_WIDTH - 1, GRAPH_HEIGHT - 2, TFT_BLACK);
     
-    // 计算温度范围
-    float tempRange = maxTemp - minTemp;
-    if (tempRange < 1.0) tempRange = 1.0;  // 确保有最小范围
-    
-    // 打印绘图信息
-    Serial.print("绘制图表 - 温度范围: ");
-    Serial.print(minTemp);
-    Serial.print(" 到 ");
-    Serial.print(maxTemp);
-    Serial.print(", 数据点数: ");
-    Serial.println(sensorRecords[sensorIndex].recordCount);
+    // 重新绘制网格线和刻度值
+    drawGraphBackground(sensorIndex);
     
     // 绘制数据点
     for (int i = 1; i < sensorRecords[sensorIndex].recordCount; i++) {
@@ -305,29 +271,22 @@ void drawGraph(int sensorIndex) {
       float temp2 = sensorRecords[sensorIndex].temps[i];
       
       if (temp1 != DEVICE_DISCONNECTED_C && temp2 != DEVICE_DISCONNECTED_C) {
-        // 计算坐标
-        int x1 = GRAPH_LEFT + ((i-1) * GRAPH_WIDTH / (MAX_RECORDS - 1));
-        int x2 = GRAPH_LEFT + (i * GRAPH_WIDTH / (MAX_RECORDS - 1));
-        int y1 = GRAPH_TOP + GRAPH_HEIGHT - ((temp1 - minTemp) * GRAPH_HEIGHT / tempRange);
-        int y2 = GRAPH_TOP + GRAPH_HEIGHT - ((temp2 - minTemp) * GRAPH_HEIGHT / tempRange);
-        
-        // 打印坐标信息
-        Serial.print("绘制线段: (");
-        Serial.print(x1);
-        Serial.print(",");
-        Serial.print(y1);
-        Serial.print(") -> (");
-        Serial.print(x2);
-        Serial.print(",");
-        Serial.print(y2);
-        Serial.println(")");
+        // 计算坐标 - 现在每个数据点对应一个像素位置
+        int x1 = GRAPH_LEFT + i - 1;
+        int x2 = GRAPH_LEFT + i;
+        int y1 = GRAPH_TOP + GRAPH_HEIGHT - ((temp1 - TEMP_MIN) * GRAPH_HEIGHT / (TEMP_MAX - TEMP_MIN));
+        int y2 = GRAPH_TOP + GRAPH_HEIGHT - ((temp2 - TEMP_MIN) * GRAPH_HEIGHT / (TEMP_MAX - TEMP_MIN));
         
         // 绘制线段
         tft.drawLine(x1, y1, x2, y2, TFT_GREEN);
         
-        // 绘制数据点
-        tft.fillCircle(x1, y1, 1, TFT_GREEN);
-        tft.fillCircle(x2, y2, 1, TFT_GREEN);
+        // 绘制数据点（只在网格线位置绘制）
+        if (i % GRID_X_SPACING == 0) {
+          tft.fillCircle(x1, y1, 1, TFT_GREEN);
+        }
+        if (i == sensorRecords[sensorIndex].recordCount - 1) {
+          tft.fillCircle(x2, y2, 1, TFT_GREEN);
+        }
       }
     }
     
@@ -529,7 +488,7 @@ void setup() {
   // 初始化显示屏
   tft.init();
   tft.initDMA();  // 启用DMA加速
-  tft.setRotation(1);
+  tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
   
   // 初始化传感器
