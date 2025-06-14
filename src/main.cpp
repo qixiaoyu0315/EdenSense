@@ -417,25 +417,31 @@ void onButton1Click() {
 
 void onButton2Click() {
   if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
+    // 循环切换到上一个传感器
     if (selectedSensor > 0) {
       selectedSensor--;
-      firstDraw = true;
-      graphState.needsFullRedraw = true;
-      Serial.print("Button2: 切换到传感器 ");
-      Serial.println(selectedSensor);
+    } else {
+      selectedSensor = totalSensors - 1;  // 如果是第一个，则跳转到最后一个
     }
+    firstDraw = true;
+    graphState.needsFullRedraw = true;
+    Serial.print("Button2: 切换到传感器 ");
+    Serial.println(selectedSensor);
   }
 }
 
 void onButton3Click() {
   if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
-    if (selectedSensor < totalSensors-1) {
+    // 循环切换到下一个传感器
+    if (selectedSensor < totalSensors - 1) {
       selectedSensor++;
-      firstDraw = true;
-      graphState.needsFullRedraw = true;
-      Serial.print("Button3: 切换到传感器 ");
-      Serial.println(selectedSensor);
+    } else {
+      selectedSensor = 0;  // 如果是最后一个，则跳转到第一个
     }
+    firstDraw = true;
+    graphState.needsFullRedraw = true;
+    Serial.print("Button3: 切换到传感器 ");
+    Serial.println(selectedSensor);
   }
 }
 
