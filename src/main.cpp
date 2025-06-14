@@ -197,10 +197,34 @@ void drawGraph(int sensorIndex) {
                         (lastSensorIndex != sensorIndex) || 
                         graphState.needsFullRedraw;
   
+  // 添加调试信息
+  if (lastSensorIndex != sensorIndex) {
+    Serial.print("传感器切换: ");
+    Serial.print(lastSensorIndex);
+    Serial.print(" -> ");
+    Serial.println(sensorIndex);
+  }
+  
   if (needsFullRedraw) {
+    // 清除整个屏幕
+    tft.fillScreen(TFT_BLACK);
+    
+    // 显示当前传感器编号
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("T" + String(sensorIndex + 1), tft.width()/2, 20);
+    
     drawGraphBackground(sensorIndex);
     lastSensorIndex = sensorIndex;
     graphState.needsFullRedraw = false;
+    
+    // 重置其他状态变量
+    lastMinTemp = -999;
+    lastMaxTemp = -999;
+    lastAvgTemp = -999;
+    lastCurrentTemp = -999;
+    lastRecordCount = 0;
   }
   
   // 获取温度数据
