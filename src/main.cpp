@@ -120,6 +120,7 @@ unsigned long lastTempRequestTime = 0;
 bool tempRequestPending = false;
 unsigned long lastTempStoreTime = 0;  // 上次温度存储时间
 unsigned long lastTempUpdateTime = 0;  // 上次温度显示更新时间
+bool displayNeedsUpdate = false;  // 标记是否需要更新显示
 
 // 全局对象定义
 TFT_eSPI tft;
@@ -144,6 +145,7 @@ void onButton2Click();
 void onButton3Click();
 void onButton4Click();
 void checkTemperatureAlarms(int sensorIndex, float temp);
+void updateDisplay();
 
 // 函数实现
 void drawGraphBackground(int sensorIndex) {
@@ -538,7 +540,7 @@ void onButton1Click() {
   } else if (selectedSensor == -1) {
     selectedSensor = 0;
   }
-  displayState.needsRedraw = true;
+  displayNeedsUpdate = true;  // 标记需要更新显示
   
   // 添加详细日志
   Serial.print("[按键1] 时间戳: ");
@@ -561,7 +563,7 @@ void onButton2Click() {
     } else {
       selectedSensor = (selectedSensor + 1) % totalSensors;
     }
-    displayState.needsRedraw = true;
+    displayNeedsUpdate = true;  // 标记需要更新显示
     
     // 添加详细日志
     Serial.print("[按键2] 时间戳: ");
@@ -592,7 +594,7 @@ void onButton3Click() {
     } else {
       selectedSensor = (selectedSensor - 1 + totalSensors) % totalSensors;
     }
-    displayState.needsRedraw = true;
+    displayNeedsUpdate = true;  // 标记需要更新显示
     
     // 添加详细日志
     Serial.print("[按键3] 时间戳: ");
@@ -709,6 +711,9 @@ void loop() {
     return;
   }
   
+  // 立即处理显示更新（按键触发）
+  updateDisplay();
+  
   // 非阻塞式温度传感器读取和显示更新
   if (!tempRequestPending) {
     if (currentMillis - lastTempRequestTime >= TEMP_UPDATE_INTERVAL) {
@@ -722,29 +727,16 @@ void loop() {
       // 更新温度记录（每10秒存储一次）
       updateTempRecords();
       
-      // 检查所有传感器的温度报警状态（每秒更新）
+      // 检查所有传感器的温度报警状态
       for (int i = 0; i < totalSensors; i++) {
         float tempC = sensors.getTempCByIndex(i);
         if (tempC != DEVICE_DISCONNECTED_C) {
           checkTemperatureAlarms(i, tempC);
+          // 如果报警状态改变，标记需要更新显示
+          if (alarmStates[i].highAlarm || alarmStates[i].lowAlarm) {
+            displayNeedsUpdate = true;
+          }
         }
-      }
-      
-      // 根据当前模式更新显示（每秒更新）
-      switch (currentMode) {
-        case MODE_OVERVIEW:
-          displayOverview();
-          break;
-        case MODE_DETAIL:
-          if (selectedSensor >= 0 && selectedSensor < totalSensors) {
-            displayDetailView(selectedSensor);
-          }
-          break;
-        case MODE_GRAPH:
-          if (selectedSensor >= 0 && selectedSensor < totalSensors) {
-            drawGraph(selectedSensor);
-          }
-          break;
       }
       
       tempRequestPending = false;
@@ -757,7 +749,7 @@ void loop() {
       if (currentMillis - alarmStates[i].lastBlinkTime >= ALARM_BLINK_INTERVAL) {
         alarmStates[i].blinkState = !alarmStates[i].blinkState;
         alarmStates[i].lastBlinkTime = currentMillis;
-        displayState.needsRedraw = true;
+        displayNeedsUpdate = true;  // 使用新的显示更新标记
       }
     }
   }
@@ -780,4 +772,31 @@ void checkTemperatureAlarms(int sensorIndex, float temp) {
   } else {
     alarm.blinkState = false;
   }
+}
+
+// 添加显示更新函数
+void updateDisplay() {
+  if (!displayNeedsUpdate && !displayState.needsRedraw) {
+    return;  // 如果没有需要更新的内容，直接返回
+  }
+
+  // 根据当前模式更新显示
+  switch (currentMode) {
+    case MODE_OVERVIEW:
+      displayOverview();
+      break;
+    case MODE_DETAIL:
+      if (selectedSensor >= 0 && selectedSensor < totalSensors) {
+        displayDetailView(selectedSensor);
+      }
+      break;
+    case MODE_GRAPH:
+      if (selectedSensor >= 0 && selectedSensor < totalSensors) {
+        drawGraph(selectedSensor);
+      }
+      break;
+  }
+  
+  displayNeedsUpdate = false;  // 清除显示更新标记
+  displayState.needsRedraw = false;  // 清除状态更新标记
 } 
