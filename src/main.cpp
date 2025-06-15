@@ -445,9 +445,6 @@ void displayDetailView(int sensorIndex) {
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.drawString("T" + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
-    
-    // 显示报警阈值（只在完全重绘时显示）
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
   }
   
   // 更新状态记录
@@ -461,28 +458,66 @@ void displayDetailView(int sensorIndex) {
     tft.fillRect(0, 40, SCREEN_WIDTH, 60, TFT_BLACK);
     
     // 显示温度值
-    tft.setTextSize(3);
+    tft.setTextSize(4);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString(String(tempC, 1) + "C", SCREEN_WIDTH/2, 60);
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.drawString(String(tempC, 1) + "C", SCREEN_WIDTH/2, 40);
     
-    // 清除报警状态显示区域
-    tft.fillRect(0, 80, SCREEN_WIDTH, 20, TFT_BLACK);
+    // 计算统计数据
+    float minTemp = 999;
+    float maxTemp = -999;
+    float sumTemp = 0;
+    int validCount = 0;
     
-    // 显示报警状态
-    tft.setTextSize(1);
-    if (alarmStates[sensorIndex].highAlarm) {
-      tft.setTextColor(TFT_RED, TFT_BLACK);
-      tft.drawString("高温报警", SCREEN_WIDTH/2, 90);
-    } else if (alarmStates[sensorIndex].lowAlarm) {
-      tft.setTextColor(TFT_BLUE, TFT_BLACK);
-      tft.drawString("低温报警", SCREEN_WIDTH/2, 90);
-    } else {
-      tft.setTextColor(TFT_GREEN, TFT_BLACK);
-      tft.drawString("正常", SCREEN_WIDTH/2, 90);
+    for (int i = 0; i < sensorRecords[sensorIndex].recordCount; i++) {
+      float temp = sensorRecords[sensorIndex].temps[i];
+      if (temp != DEVICE_DISCONNECTED_C) {
+        minTemp = min(minTemp, temp);
+        maxTemp = max(maxTemp, temp);
+        sumTemp += temp;
+        validCount++;
+      }
     }
+    
+    float avgTemp = validCount > 0 ? sumTemp / validCount : tempC;
+    
+    // 清除统计信息显示区域
+    tft.fillRect(0, 80, SCREEN_WIDTH, 60, TFT_BLACK);
+    
+    // 设置统计信息文本属性
+    tft.setTextSize(2);
+    tft.setTextDatum(MC_DATUM);  // 改为居中对齐
+    
+      // 显示最大温度（红色）
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.drawString("Max: " + String(maxTemp, 1) + "C", SCREEN_WIDTH/2, 75);
+
+    // 显示平均温度（黄色）
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.drawString("Avg: " + String(avgTemp, 1) + "C", SCREEN_WIDTH/2, 95);
+    
+    // 显示最小温度（蓝色）
+    tft.setTextColor(TFT_BLUE, TFT_BLACK);
+    tft.drawString("Min: " + String(minTemp, 1) + "C", SCREEN_WIDTH/2, 115);
+    
+    // // 清除报警状态显示区域
+    // tft.fillRect(0, 120, SCREEN_WIDTH, 20, TFT_BLACK);
+    
+    // // 显示报警状态
+    // tft.setTextSize(1);
+    // if (alarmStates[sensorIndex].highAlarm) {
+    //   tft.setTextColor(TFT_RED, TFT_BLACK);
+    //   tft.drawString("高温报警", SCREEN_WIDTH/2, 125);
+    // } else if (alarmStates[sensorIndex].lowAlarm) {
+    //   tft.setTextColor(TFT_BLUE, TFT_BLACK);
+    //   tft.drawString("低温报警", SCREEN_WIDTH/2, 125);
+    // } else {
+    //   tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    //   tft.drawString("正常", SCREEN_WIDTH/2, 125);
+    // }
   } else {
     // 清除整个显示区域
-    tft.fillRect(0, 40, SCREEN_WIDTH, 80, TFT_BLACK);
+    tft.fillRect(0, 40, SCREEN_WIDTH, 100, TFT_BLACK);
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.drawString("传感器未连接", SCREEN_WIDTH/2, 60);
   }
