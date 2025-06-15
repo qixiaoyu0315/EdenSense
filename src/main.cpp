@@ -144,7 +144,6 @@ void updateTempInfo(float minTemp, float maxTemp, float avgTemp, float currentTe
 void drawGraph(int sensorIndex);
 void displayOverview();
 void displayDetailView(int index);
-void updateTempRecords();
 void onButton1Click();
 void onButton2Click();
 void onButton3Click();
@@ -492,10 +491,6 @@ void displayDetailView(int sensorIndex) {
   displayState.needsRedraw = false;
 }
 
-void updateTempRecords() {
-  // 此函数现在只用于初始化，实际温度记录在readTemperatures中完成
-}
-
 // 修改按键回调函数
 void onButton1Click() {
   unsigned long clickTime = millis();
@@ -603,6 +598,10 @@ void onButton4Click() {
 void setup() {
   Serial.begin(115200);
   Serial.println("EdenSense 温度监控系统启动...");
+
+  // 初始化温度传感器
+  sensors.begin();
+  totalSensors = sensors.getDeviceCount();
   
   // 初始化显示屏
   tft.init();
@@ -619,10 +618,6 @@ void setup() {
   button2.attachClick(onButton2Click);
   button3.attachClick(onButton3Click);
   button4.attachClick(onButton4Click);
-  
-  // 初始化温度传感器
-  sensors.begin();
-  totalSensors = sensors.getDeviceCount();
   
   // 初始化温度记录数组并获取初始温度值
   for (int i = 0; i < totalSensors; i++) {
