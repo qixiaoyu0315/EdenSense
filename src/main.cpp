@@ -68,6 +68,10 @@ struct TempRecord {
   unsigned long timestamps[MAX_RECORDS];  // 使用 unsigned long 存储时间戳（毫秒）
   int recordCount;  // 当前记录数量
   int currentIndex;  // 当前写入位置
+  float minTemp;    // 最小温度
+  float maxTemp;    // 最大温度
+  float avgTemp;    // 平均温度
+  unsigned long lastStatsUpdate;  // 上次统计数据更新时间
 };
 
 // 图表状态结构
@@ -275,39 +279,11 @@ void drawGraph(int sensorIndex) {
     lastRecordCount = sensorRecords[sensorIndex].recordCount;
   }
   
-  // 获取温度数据
-  float minTemp = 999;
-  float maxTemp = -999;
-  float sumTemp = 0;
+  // 使用存储的统计数据
+  float minTemp = sensorRecords[sensorIndex].minTemp;
+  float maxTemp = sensorRecords[sensorIndex].maxTemp;
+  float avgTemp = sensorRecords[sensorIndex].avgTemp;
   float currentTemp = currentTemps[sensorIndex];
-  int validCount = 0;
-  
-  // 计算统计数据
-  for (int i = 0; i < sensorRecords[sensorIndex].recordCount; i++) {
-    float temp = sensorRecords[sensorIndex].temps[i];
-    if (temp != DEVICE_DISCONNECTED_C) {
-      minTemp = min(minTemp, temp);
-      maxTemp = max(maxTemp, temp);
-      sumTemp += temp;
-      validCount++;
-    }
-  }
-  
-  float avgTemp = validCount > 0 ? sumTemp / validCount : 0;
-  
-  // 打印图表数据信息
-  if (sensorRecords[sensorIndex].recordCount > 0) {
-    Serial.print("图表数据 - 传感器 ");
-    Serial.print(sensorIndex);
-    Serial.print(": 记录数=");
-    Serial.print(sensorRecords[sensorIndex].recordCount);
-    Serial.print(", 最小值=");
-    Serial.print(minTemp);
-    Serial.print(", 最大值=");
-    Serial.print(maxTemp);
-    Serial.print(", 平均值=");
-    Serial.println(avgTemp);
-  }
   
   // 检查是否需要更新温度信息
   bool needsInfoUpdate = needsFullRedraw ||
@@ -516,35 +492,22 @@ void displayDetailView(int sensorIndex) {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.drawString(String(tempC, 1) + "C", SCREEN_WIDTH/2, 40);
     
-    // 计算统计数据
-    float minTemp = 999;
-    float maxTemp = -999;
-    float sumTemp = 0;
-    int validCount = 0;
-    
-    for (int i = 0; i < sensorRecords[sensorIndex].recordCount; i++) {
-      float temp = sensorRecords[sensorIndex].temps[i];
-      if (temp != DEVICE_DISCONNECTED_C) {
-        minTemp = min(minTemp, temp);
-        maxTemp = max(maxTemp, temp);
-        sumTemp += temp;
-        validCount++;
-      }
-    }
-    
-    float avgTemp = validCount > 0 ? sumTemp / validCount : tempC;
+    // 使用存储的统计数据
+    float minTemp = sensorRecords[sensorIndex].minTemp;
+    float maxTemp = sensorRecords[sensorIndex].maxTemp;
+    float avgTemp = sensorRecords[sensorIndex].avgTemp;
     
     // 清除统计信息显示区域
     tft.fillRect(0, 80, SCREEN_WIDTH, 60, TFT_BLACK);
     
     // 设置统计信息文本属性
     tft.setTextSize(2);
-    tft.setTextDatum(MC_DATUM);  // 改为居中对齐
+    tft.setTextDatum(MC_DATUM);
     
-      // 显示最大温度（红色）
+    // 显示最大温度（红色）
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.drawString("Max: " + String(maxTemp, 1) + "C", SCREEN_WIDTH/2, 75);
-
+    
     // 显示平均温度（黄色）
     tft.setTextColor(TFT_YELLOW, TFT_BLACK);
     tft.drawString("Avg: " + String(avgTemp, 1) + "C", SCREEN_WIDTH/2, 95);
@@ -552,22 +515,6 @@ void displayDetailView(int sensorIndex) {
     // 显示最小温度（蓝色）
     tft.setTextColor(TFT_BLUE, TFT_BLACK);
     tft.drawString("Min: " + String(minTemp, 1) + "C", SCREEN_WIDTH/2, 115);
-    
-    // // 清除报警状态显示区域
-    // tft.fillRect(0, 120, SCREEN_WIDTH, 20, TFT_BLACK);
-    
-    // // 显示报警状态
-    // tft.setTextSize(1);
-    // if (alarmStates[sensorIndex].highAlarm) {
-    //   tft.setTextColor(TFT_RED, TFT_BLACK);
-    //   tft.drawString("高温报警", SCREEN_WIDTH/2, 125);
-    // } else if (alarmStates[sensorIndex].lowAlarm) {
-    //   tft.setTextColor(TFT_BLUE, TFT_BLACK);
-    //   tft.drawString("低温报警", SCREEN_WIDTH/2, 125);
-    // } else {
-    //   tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    //   tft.drawString("正常", SCREEN_WIDTH/2, 125);
-    // }
   } else {
     // 清除整个显示区域
     tft.fillRect(0, 40, SCREEN_WIDTH, 100, TFT_BLACK);
@@ -725,6 +672,10 @@ void setup() {
   for (int i = 0; i < totalSensors; i++) {
     sensorRecords[i].recordCount = 0;
     sensorRecords[i].currentIndex = 0;
+    sensorRecords[i].minTemp = DEVICE_DISCONNECTED_C;
+    sensorRecords[i].maxTemp = DEVICE_DISCONNECTED_C;
+    sensorRecords[i].avgTemp = DEVICE_DISCONNECTED_C;
+    sensorRecords[i].lastStatsUpdate = 0;
     
     // 获取初始温度值
     sensors.requestTemperatures();
@@ -735,6 +686,26 @@ void setup() {
       sensorRecords[i].timestamps[0] = millis();
       sensorRecords[i].recordCount = 1;
       sensorRecords[i].currentIndex = 1;
+      
+      // 初始化统计数据
+      sensorRecords[i].minTemp = initialTemp;
+      sensorRecords[i].maxTemp = initialTemp;
+      sensorRecords[i].avgTemp = initialTemp;
+      sensorRecords[i].lastStatsUpdate = millis();
+      
+      // 打印初始化信息
+      Serial.println("\n=== 传感器初始化 ===");
+      Serial.print("传感器 ");
+      Serial.print(i);
+      Serial.print(" (T");
+      Serial.print(i + 1);
+      Serial.println(")");
+      Serial.print("初始温度: ");
+      Serial.print(initialTemp);
+      Serial.println("C");
+      Serial.print("时间戳: ");
+      Serial.println(millis());
+      Serial.println("====================\n");
       
       // 初始化显示状态
       displayState.lastTemps[i] = initialTemp;
@@ -866,8 +837,9 @@ void readTemperatures() {
         if (tempC != DEVICE_DISCONNECTED_C) {
           currentTemps[i] = tempC;  // 更新温度缓存
           
-          // 检查是否需要存储到记录数组
+          // 检查是否需要存储到记录数组（每12分钟存储一次）
           if (currentMillis - lastTempStoreTime >= TEMP_STORE_INTERVAL) {
+            // 存储温度数据
             sensorRecords[i].temps[sensorRecords[i].currentIndex] = tempC;
             sensorRecords[i].timestamps[sensorRecords[i].currentIndex] = currentMillis;
             
@@ -877,15 +849,77 @@ void readTemperatures() {
               sensorRecords[i].recordCount++;
             }
             
-            // 打印存储信息
-            Serial.print("传感器 ");
-            Serial.print(i);
-            Serial.print(" 存储温度: ");
-            Serial.print(tempC);
-            Serial.print("C, 存储位置: ");
-            Serial.print(sensorRecords[i].currentIndex);
-            Serial.print(", 总记录数: ");
-            Serial.println(sensorRecords[i].recordCount);
+            // 重新计算统计数据
+            float minTemp = 999.0;  // 使用一个较大的初始值
+            float maxTemp = -999.0; // 使用一个较小的初始值
+            float sumTemp = 0.0;
+            int validCount = 0;
+            
+            // 遍历所有记录计算统计数据
+            for (int j = 0; j < sensorRecords[i].recordCount; j++) {
+              float temp = sensorRecords[i].temps[j];
+              if (temp != DEVICE_DISCONNECTED_C) {
+                minTemp = min(minTemp, temp);
+                maxTemp = max(maxTemp, temp);
+                sumTemp += temp;
+                validCount++;
+              }
+            }
+            
+            // 更新统计数据
+            if (validCount > 0) {
+              sensorRecords[i].minTemp = minTemp;
+              sensorRecords[i].maxTemp = maxTemp;
+              sensorRecords[i].avgTemp = sumTemp / validCount;
+              sensorRecords[i].lastStatsUpdate = currentMillis;
+              
+              // 打印详细的统计信息用于调试
+              Serial.println("\n=== 温度统计数据更新 ===");
+              Serial.print("时间戳: ");
+              Serial.println(currentMillis);
+              Serial.print("传感器 ");
+              Serial.print(i);
+              Serial.print(" (T");
+              Serial.print(i + 1);
+              Serial.println(")");
+              Serial.print("当前温度: ");
+              Serial.print(tempC);
+              Serial.println("C");
+              Serial.print("记录数量: ");
+              Serial.println(sensorRecords[i].recordCount);
+              Serial.print("有效数据: ");
+              Serial.println(validCount);
+              Serial.print("最小温度: ");
+              Serial.print(sensorRecords[i].minTemp);
+              Serial.println("C");
+              Serial.print("最大温度: ");
+              Serial.print(sensorRecords[i].maxTemp);
+              Serial.println("C");
+              Serial.print("平均温度: ");
+              Serial.print(sensorRecords[i].avgTemp);
+              Serial.println("C");
+              Serial.print("数据数组: [");
+              for (int j = 0; j < sensorRecords[i].recordCount; j++) {
+                Serial.print(sensorRecords[i].temps[j]);
+                Serial.print(", ");
+              }
+              Serial.println("]");
+              Serial.println("====================\n");
+            } else {
+              // 如果没有有效数据，使用当前温度作为所有统计值
+              sensorRecords[i].minTemp = tempC;
+              sensorRecords[i].maxTemp = tempC;
+              sensorRecords[i].avgTemp = tempC;
+              sensorRecords[i].lastStatsUpdate = currentMillis;
+              
+              Serial.println("\n=== 温度统计数据初始化 ===");
+              Serial.print("传感器 ");
+              Serial.print(i);
+              Serial.print(" 使用当前温度初始化: ");
+              Serial.print(tempC);
+              Serial.println("C");
+              Serial.println("====================\n");
+            }
           }
           
           // 检查报警状态
