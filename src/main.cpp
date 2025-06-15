@@ -41,9 +41,8 @@ typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 
 // 温度记录相关定义
 #define MAX_RECORDS 120  // 保持120个数据点
-#define RECORD_INTERVAL 10  // 每10秒记录一次（保持不变）
-#define TEMP_UPDATE_INTERVAL 10000  // 温度显示更新间隔（1秒）
-#define TEMP_STORE_INTERVAL 10000  // 温度存储间隔（10秒）
+#define TEMP_UPDATE_INTERVAL 5000  // 温度显示更新间隔（1秒）
+#define TEMP_STORE_INTERVAL 720000  // 温度存储间隔（12分钟，单位：毫秒）
 
 #define TEMP_MIN 10.0  // 最小温度刻度
 #define TEMP_MAX 45.0  // 最大温度刻度
@@ -138,10 +137,6 @@ static String getSensorTitle(int sensorIndex) {
   String shortAddr = getShortAddress(sensorAddresses[sensorIndex]);
   return "T" + String(sensorIndex + 1) + "/" + shortAddr;
 }
-
-// 全局变量定义（继续）
-unsigned long lastTempUpdate = 0;  // 上次温度更新时间
-const int tempUpdateInterval = 10000;  // 温度更新间隔（毫秒）
 
 bool firstDraw = true;      // 首次绘制标志
 float lastTemps[16] = {0};  // 假设最多16个传感器
