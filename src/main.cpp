@@ -5,6 +5,10 @@
 #include <SPI.h>
 #include <OneButton.h>
 #include <time.h>
+#include <stdio.h>  // 为sprintf添加
+
+// 类型定义
+typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 
 // 按键定义
 #define KEY1_PIN   35    // K1: 切换显示模式
@@ -99,6 +103,43 @@ struct DisplayState {
 int selectedSensor = -1;      // 当前选择的传感器，-1表示显示所有
 int totalSensors = 0;         // 总传感器数量
 
+// 函数前向声明
+void drawGraphBackground(int sensorIndex);
+void updateTempInfo(float minTemp, float maxTemp, float avgTemp, float currentTemp);
+void drawGraph(int sensorIndex);
+void displayOverview();
+void displayDetailView(int index);
+void onButton1Click();
+void onButton2Click();
+void onButton3Click();
+void onButton4Click();
+void checkTemperatureAlarms(int sensorIndex, float temp);
+void updateDisplay();
+void readTemperatures();
+
+// 添加全局变量存储传感器序列号
+DeviceAddress sensorAddresses[16];  // 存储传感器序列号
+
+// 辅助函数实现
+String getShortAddress(DeviceAddress deviceAddress) {
+  String result;
+  result.reserve(8);  // 预分配8个字符的空间
+  
+  // 只使用序列号的后4个字节，转换为大写16进制字符串
+  for (int i = 4; i < 8; i++) {
+    char hex[3];
+    sprintf(hex, "%02X", deviceAddress[i]);
+    result += hex;
+  }
+  return result;
+}
+
+static String getSensorTitle(int sensorIndex) {
+  String shortAddr = getShortAddress(sensorAddresses[sensorIndex]);
+  return "T" + String(sensorIndex + 1) + "/" + shortAddr;
+}
+
+// 全局变量定义（继续）
 unsigned long lastTempUpdate = 0;  // 上次温度更新时间
 const int tempUpdateInterval = 10000;  // 温度更新间隔（毫秒）
 
@@ -137,20 +178,6 @@ OneButton button1(KEY1_PIN, true);  // 使用内部上拉，启用消抖
 OneButton button2(KEY2_PIN, true);
 OneButton button3(KEY3_PIN, true);
 OneButton button4(KEY4_PIN, true);
-
-// 函数声明
-void drawGraphBackground(int sensorIndex);
-void updateTempInfo(float minTemp, float maxTemp, float avgTemp, float currentTemp);
-void drawGraph(int sensorIndex);
-void displayOverview();
-void displayDetailView(int index);
-void onButton1Click();
-void onButton2Click();
-void onButton3Click();
-void onButton4Click();
-void checkTemperatureAlarms(int sensorIndex, float temp);
-void updateDisplay();
-void readTemperatures();
 
 // 函数实现
 void drawGraphBackground(int sensorIndex) {
@@ -222,11 +249,21 @@ void drawGraph(int sensorIndex) {
     // 清除整个屏幕
     tft.fillScreen(TFT_BLACK);
     
-    // 显示当前传感器编号（T1, T2格式）
+    // 显示传感器编号和序列号
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("T" + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
+    
+    // 生成序列号显示
+    String shortAddr;
+    shortAddr.reserve(8);
+    for (int i = 4; i < 8; i++) {
+      char hex[3];
+      sprintf(hex, "%02X", sensorAddresses[sensorIndex][i]);
+      shortAddr += hex;
+    }
+    String title = "T" + String(sensorIndex + 1) + "/" + shortAddr;
+    tft.drawString(title, SCREEN_WIDTH/2, TITLE_HEIGHT/2);
     
     drawGraphBackground(sensorIndex);
     lastSensorIndex = sensorIndex;
@@ -390,11 +427,22 @@ void displayOverview() {
     displayState.lastAlarmStates[i][0] = alarmStates[i].highAlarm;
     displayState.lastAlarmStates[i][1] = alarmStates[i].lowAlarm;
     
-    // 显示传感器编号（T1, T2格式）
+    // 显示传感器编号和序列号
     tft.setTextSize(OVERVIEW_SENSOR_SIZE);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(TL_DATUM);
-    tft.drawString("T" + String(i + 1), 5, rowY);
+    
+    // 生成序列号显示
+    String shortAddr;
+    shortAddr.reserve(8);
+    for (int j = 4; j < 8; j++) {
+      char hex[3];
+      sprintf(hex, "%02X", sensorAddresses[i][j]);
+      shortAddr += hex;
+    }
+    String title = "T" + String(i + 1) + ":"; 
+    tft.setTextSize(OVERVIEW_TEMP_SIZE);
+    tft.drawString(title, 5, rowY);
     
     // 显示温度值
     if (tempC != DEVICE_DISCONNECTED_C) {
@@ -440,11 +488,21 @@ void displayDetailView(int sensorIndex) {
   if (displayState.lastMode != currentMode || displayState.lastSelectedSensor != sensorIndex) {
     tft.fillScreen(TFT_BLACK);
     
-    // 显示传感器编号（T1, T2格式）
+    // 显示传感器编号和序列号
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("T" + String(sensorIndex + 1), SCREEN_WIDTH/2, TITLE_HEIGHT/2);
+    
+    // 生成序列号显示
+    String shortAddr;
+    shortAddr.reserve(8);
+    for (int i = 4; i < 8; i++) {
+      char hex[3];
+      sprintf(hex, "%02X", sensorAddresses[sensorIndex][i]);
+      shortAddr += hex;
+    }
+    String title = "T" + String(sensorIndex + 1) + "/" + shortAddr;
+    tft.drawString(title, SCREEN_WIDTH/2, TITLE_HEIGHT/2);
   }
   
   // 更新状态记录
@@ -637,6 +695,20 @@ void setup() {
   // 初始化温度传感器
   sensors.begin();
   totalSensors = sensors.getDeviceCount();
+  
+  // 获取所有传感器的序列号
+  for (int i = 0; i < totalSensors; i++) {
+    if (sensors.getAddress(sensorAddresses[i], i)) {
+      Serial.print("传感器 ");
+      Serial.print(i);
+      Serial.print(" 序列号: ");
+      for (uint8_t j = 0; j < 8; j++) {
+        Serial.print(sensorAddresses[i][j], HEX);
+        Serial.print(" ");
+      }
+      Serial.println();
+    }
+  }
   
   // 初始化显示屏
   tft.init();
