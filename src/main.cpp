@@ -24,6 +24,7 @@
 // 图表显示参数
 #define GRAPH_HEIGHT 80    // 图表高度
 #define GRAPH_WIDTH 120    // 图表宽度
+
 #define GRAPH_LEFT 9       // 图表左边距
 #define TEMP_SCALE_WIDTH 8  // 温度刻度值显示区域宽度
 #define GRAPH_TOP (TITLE_HEIGHT + TEMP_INFO_HEIGHT)  // 图表顶部位置
@@ -37,10 +38,12 @@
 // 温度记录相关定义
 #define MAX_RECORDS 120  // 保持120个数据点
 #define RECORD_INTERVAL 10  // 每10秒记录一次（保持不变）
-#define TEMP_UPDATE_INTERVAL 1000  // 温度显示更新间隔（1秒）
+#define TEMP_UPDATE_INTERVAL 10000  // 温度显示更新间隔（1秒）
 #define TEMP_STORE_INTERVAL 10000  // 温度存储间隔（10秒）
+
 #define TEMP_MIN 10.0  // 最小温度刻度
 #define TEMP_MAX 45.0  // 最大温度刻度
+
 #define TEMP_STEP 5.0  // 温度刻度间隔
 #define GRID_X_SPACING 12  // 垂直网格线间距（像素）
 
@@ -95,15 +98,18 @@ struct DisplayState {
 // 全局变量定义
 int selectedSensor = -1;      // 当前选择的传感器，-1表示显示所有
 int totalSensors = 0;         // 总传感器数量
+
 unsigned long lastTempUpdate = 0;  // 上次温度更新时间
-const int tempUpdateInterval = 1000;  // 温度更新间隔（毫秒）
+const int tempUpdateInterval = 10000;  // 温度更新间隔（毫秒）
+
 bool firstDraw = true;      // 首次绘制标志
 float lastTemps[16] = {0};  // 假设最多16个传感器
+bool screenOn = true;  // 屏幕开关状态
+
 DisplayMode currentMode = MODE_OVERVIEW;
 TempRecord sensorRecords[16];  // 假设最多16个传感器
 GraphState graphState = {0};   // 图表状态
 AlarmState alarmStates[16];  // 每个传感器的报警状态
-bool screenOn = true;  // 屏幕开关状态
 DisplayState displayState = {false, -1, MODE_OVERVIEW, {0}, {{false}}};
 
 // 添加新的全局变量
@@ -117,8 +123,10 @@ unsigned long lastTempUpdateTime = 0;  // 上次温度显示更新时间
 
 // 全局对象定义
 TFT_eSPI tft;
+
 OneWire oneWire(ONEWIRE_BUS);
 DallasTemperature sensors(&oneWire);
+
 OneButton button1(KEY1_PIN, true);  // 使用内部上拉，启用消抖
 OneButton button2(KEY2_PIN, true);
 OneButton button3(KEY3_PIN, true);
@@ -644,18 +652,12 @@ void setup() {
   button3.attachClick(onButton3Click);
   button4.attachClick(onButton4Click);
   
-  // 设置按键消抖时间（毫秒）
-  button1.setDebounceTicks(50);
-  button2.setDebounceTicks(50);
-  button3.setDebounceTicks(50);
-  button4.setDebounceTicks(50);
-  
   // 初始化温度传感器
   sensors.begin();
   totalSensors = sensors.getDeviceCount();
-  Serial.print("找到 ");
-  Serial.print(totalSensors);
-  Serial.println(" 个温度传感器");
+  // Serial.print("找到 ");
+  // Serial.print(totalSensors);
+  // Serial.println(" 个温度传感器");
   
   // 初始化温度记录数组
   for (int i = 0; i < totalSensors; i++) {
