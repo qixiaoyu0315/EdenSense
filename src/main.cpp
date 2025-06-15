@@ -35,8 +35,10 @@
 #define OVERVIEW_SENSOR_SIZE 1  // 传感器编号字体大小
 
 // 温度记录相关定义
-#define MAX_RECORDS 120  // 修改为120个数据点
-#define RECORD_INTERVAL 10  // 每10秒记录一次
+#define MAX_RECORDS 120  // 保持120个数据点
+#define RECORD_INTERVAL 10  // 每10秒记录一次（保持不变）
+#define TEMP_UPDATE_INTERVAL 1000  // 温度显示更新间隔（1秒）
+#define TEMP_STORE_INTERVAL 10000  // 温度存储间隔（10秒）
 #define TEMP_MIN 10.0  // 最小温度刻度
 #define TEMP_MAX 45.0  // 最大温度刻度
 #define TEMP_STEP 5.0  // 温度刻度间隔
@@ -103,6 +105,15 @@ GraphState graphState = {0};   // 图表状态
 AlarmState alarmStates[16];  // 每个传感器的报警状态
 bool screenOn = true;  // 屏幕开关状态
 DisplayState displayState = {false, -1, MODE_OVERVIEW, {0}, {{false}}};
+
+// 添加新的全局变量
+unsigned long lastScreenCommandTime = 0;
+bool screenCommandPending = false;
+bool screenCommandType = false;  // false = 关闭命令, true = 开启命令
+unsigned long lastTempRequestTime = 0;
+bool tempRequestPending = false;
+unsigned long lastTempStoreTime = 0;  // 上次温度存储时间
+unsigned long lastTempUpdateTime = 0;  // 上次温度显示更新时间
 
 // 全局对象定义
 TFT_eSPI tft;
@@ -473,43 +484,46 @@ void displayDetailView(int sensorIndex) {
 }
 
 void updateTempRecords() {
-  static unsigned long lastRecordTime = 0;
   unsigned long currentTime = millis();
   
-  // 检查是否需要记录新数据
-  if (currentTime - lastRecordTime >= (RECORD_INTERVAL * 1000)) {
-    Serial.println("开始记录温度数据...");
-    for (int i = 0; i < totalSensors; i++) {
-      float tempC = sensors.getTempCByIndex(i);
-      if (tempC != DEVICE_DISCONNECTED_C) {
-        // 更新记录
-        sensorRecords[i].temps[sensorRecords[i].currentIndex] = tempC;
-        sensorRecords[i].timestamps[sensorRecords[i].currentIndex] = currentTime;
-        
-        // 打印记录信息
-        Serial.print("传感器 ");
-        Serial.print(i);
-        Serial.print(" 记录温度: ");
-        Serial.print(tempC);
-        Serial.print("C, 记录位置: ");
-        Serial.print(sensorRecords[i].currentIndex);
-        Serial.print(", 总记录数: ");
-        Serial.println(sensorRecords[i].recordCount);
-        
-        // 更新索引和计数
-        sensorRecords[i].currentIndex = (sensorRecords[i].currentIndex + 1) % MAX_RECORDS;
-        if (sensorRecords[i].recordCount < MAX_RECORDS) {
-          sensorRecords[i].recordCount++;
+  // 检查是否需要存储新数据
+  if (currentTime - lastTempStoreTime >= TEMP_STORE_INTERVAL) {
+    // 只在有温度数据时才记录
+    if (!tempRequestPending) {
+      Serial.println("开始存储温度数据...");
+      for (int i = 0; i < totalSensors; i++) {
+        float tempC = sensors.getTempCByIndex(i);
+        if (tempC != DEVICE_DISCONNECTED_C) {
+          sensorRecords[i].temps[sensorRecords[i].currentIndex] = tempC;
+          sensorRecords[i].timestamps[sensorRecords[i].currentIndex] = currentTime;
+          
+          // 更新索引和计数
+          sensorRecords[i].currentIndex = (sensorRecords[i].currentIndex + 1) % MAX_RECORDS;
+          if (sensorRecords[i].recordCount < MAX_RECORDS) {
+            sensorRecords[i].recordCount++;
+          }
+          
+          // 打印存储信息
+          Serial.print("传感器 ");
+          Serial.print(i);
+          Serial.print(" 存储温度: ");
+          Serial.print(tempC);
+          Serial.print("C, 存储位置: ");
+          Serial.print(sensorRecords[i].currentIndex);
+          Serial.print(", 总记录数: ");
+          Serial.println(sensorRecords[i].recordCount);
         }
       }
+      lastTempStoreTime = currentTime;
+      Serial.println("温度数据存储完成");
     }
-    lastRecordTime = currentTime;
-    Serial.println("温度数据记录完成");
   }
 }
 
 // 修改按键回调函数
 void onButton1Click() {
+  unsigned long clickTime = millis();
+  DisplayMode oldMode = currentMode;
   currentMode = (DisplayMode)((currentMode + 1) % 3);
   if (currentMode == MODE_OVERVIEW) {
     selectedSensor = -1;
@@ -517,11 +531,22 @@ void onButton1Click() {
     selectedSensor = 0;
   }
   displayState.needsRedraw = true;
-  Serial.print("切换到模式: ");
-  Serial.println(currentMode);
+  
+  // 添加详细日志
+  Serial.print("[按键1] 时间戳: ");
+  Serial.print(clickTime);
+  Serial.print("ms, 模式切换: ");
+  Serial.print(oldMode);
+  Serial.print(" -> ");
+  Serial.print(currentMode);
+  Serial.print(", 选中传感器: ");
+  Serial.println(selectedSensor);
 }
 
 void onButton2Click() {
+  unsigned long clickTime = millis();
+  int oldSensor = selectedSensor;
+  
   if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
     if (selectedSensor == -1) {
       selectedSensor = 0;
@@ -529,12 +554,30 @@ void onButton2Click() {
       selectedSensor = (selectedSensor + 1) % totalSensors;
     }
     displayState.needsRedraw = true;
-    Serial.print("选择传感器: ");
-    Serial.println(selectedSensor + 1);
+    
+    // 添加详细日志
+    Serial.print("[按键2] 时间戳: ");
+    Serial.print(clickTime);
+    Serial.print("ms, 当前模式: ");
+    Serial.print(currentMode);
+    Serial.print(", 传感器切换: ");
+    Serial.print(oldSensor);
+    Serial.print(" -> ");
+    Serial.println(selectedSensor);
+  } else {
+    // 添加详细日志 - 按键在非相关模式下被按下
+    Serial.print("[按键2] 时间戳: ");
+    Serial.print(clickTime);
+    Serial.print("ms, 当前模式: ");
+    Serial.print(currentMode);
+    Serial.println(", 按键在当前模式下无效");
   }
 }
 
 void onButton3Click() {
+  unsigned long clickTime = millis();
+  int oldSensor = selectedSensor;
+  
   if (currentMode == MODE_DETAIL || currentMode == MODE_GRAPH) {
     if (selectedSensor == -1) {
       selectedSensor = totalSensors - 1;
@@ -542,23 +585,42 @@ void onButton3Click() {
       selectedSensor = (selectedSensor - 1 + totalSensors) % totalSensors;
     }
     displayState.needsRedraw = true;
-    Serial.print("选择传感器: ");
-    Serial.println(selectedSensor + 1);
+    
+    // 添加详细日志
+    Serial.print("[按键3] 时间戳: ");
+    Serial.print(clickTime);
+    Serial.print("ms, 当前模式: ");
+    Serial.print(currentMode);
+    Serial.print(", 传感器切换: ");
+    Serial.print(oldSensor);
+    Serial.print(" -> ");
+    Serial.println(selectedSensor);
+  } else {
+    // 添加详细日志 - 按键在非相关模式下被按下
+    Serial.print("[按键3] 时间戳: ");
+    Serial.print(clickTime);
+    Serial.print("ms, 当前模式: ");
+    Serial.print(currentMode);
+    Serial.println(", 按键在当前模式下无效");
   }
 }
 
 void onButton4Click() {
+  unsigned long clickTime = millis();
+  bool oldScreenState = screenOn;
   screenOn = !screenOn;
-  if (screenOn) {
-    tft.writecommand(0x11);
-    delay(120);
-    tft.writecommand(0x29);
-    digitalWrite(TFT_BL, HIGH);
-  } else {
-    tft.writecommand(0x10);
-    digitalWrite(TFT_BL, LOW);
-  }
-  Serial.print("屏幕状态: ");
+  
+  // 设置屏幕命令状态
+  screenCommandPending = true;
+  screenCommandType = screenOn;
+  lastScreenCommandTime = clickTime;
+  
+  // 添加详细日志
+  Serial.print("[按键4] 时间戳: ");
+  Serial.print(clickTime);
+  Serial.print("ms, 屏幕状态切换: ");
+  Serial.print(oldScreenState ? "开启" : "关闭");
+  Serial.print(" -> ");
   Serial.println(screenOn ? "开启" : "关闭");
 }
 
@@ -615,52 +677,76 @@ void setup() {
 }
 
 void loop() {
-  // 更新按键状态
+  unsigned long currentMillis = millis();
+  
+  // 更新按键状态 - 提高按键检测频率
   button1.tick();
   button2.tick();
   button3.tick();
   button4.tick();
   
-  // 如果屏幕关闭，只处理按键，不更新显示
+  // 处理屏幕命令
+  if (screenCommandPending) {
+    if (screenCommandType) {  // 开启屏幕
+      if (currentMillis - lastScreenCommandTime >= 120) {
+        tft.writecommand(0x29);
+        digitalWrite(TFT_BL, HIGH);
+        screenCommandPending = false;
+      } else if (currentMillis - lastScreenCommandTime == 0) {
+        tft.writecommand(0x11);
+      }
+    } else {  // 关闭屏幕
+      tft.writecommand(0x10);
+      digitalWrite(TFT_BL, LOW);
+      screenCommandPending = false;
+    }
+  }
+  
+  // 如果屏幕关闭，只处理按键和屏幕命令
   if (!screenOn) {
     return;
   }
   
-  // 定期更新温度
-  unsigned long currentMillis = millis();
-  if (currentMillis - lastTempUpdate >= tempUpdateInterval) {
-    // 请求所有传感器更新温度
-    sensors.requestTemperatures();
-    
-    // 更新温度记录
-    updateTempRecords();
-    
-    // 检查所有传感器的温度报警状态
-    for (int i = 0; i < totalSensors; i++) {
-      float tempC = sensors.getTempCByIndex(i);
-      if (tempC != DEVICE_DISCONNECTED_C) {
-        checkTemperatureAlarms(i, tempC);
+  // 非阻塞式温度传感器读取和显示更新
+  if (!tempRequestPending) {
+    if (currentMillis - lastTempRequestTime >= TEMP_UPDATE_INTERVAL) {
+      sensors.requestTemperatures();
+      tempRequestPending = true;
+      lastTempRequestTime = currentMillis;
+    }
+  } else {
+    // 检查温度是否已经准备好
+    if (currentMillis - lastTempRequestTime >= 100) {  // 给传感器100ms的响应时间
+      // 更新温度记录（每10秒存储一次）
+      updateTempRecords();
+      
+      // 检查所有传感器的温度报警状态（每秒更新）
+      for (int i = 0; i < totalSensors; i++) {
+        float tempC = sensors.getTempCByIndex(i);
+        if (tempC != DEVICE_DISCONNECTED_C) {
+          checkTemperatureAlarms(i, tempC);
+        }
       }
+      
+      // 根据当前模式更新显示（每秒更新）
+      switch (currentMode) {
+        case MODE_OVERVIEW:
+          displayOverview();
+          break;
+        case MODE_DETAIL:
+          if (selectedSensor >= 0 && selectedSensor < totalSensors) {
+            displayDetailView(selectedSensor);
+          }
+          break;
+        case MODE_GRAPH:
+          if (selectedSensor >= 0 && selectedSensor < totalSensors) {
+            drawGraph(selectedSensor);
+          }
+          break;
+      }
+      
+      tempRequestPending = false;
     }
-    
-    // 根据当前模式更新显示
-    switch (currentMode) {
-      case MODE_OVERVIEW:
-        displayOverview();
-        break;
-      case MODE_DETAIL:
-        if (selectedSensor >= 0 && selectedSensor < totalSensors) {
-          displayDetailView(selectedSensor);
-        }
-        break;
-      case MODE_GRAPH:
-        if (selectedSensor >= 0 && selectedSensor < totalSensors) {
-          drawGraph(selectedSensor);
-        }
-        break;
-    }
-    
-    lastTempUpdate = currentMillis;
   }
   
   // 处理报警闪烁
@@ -669,7 +755,7 @@ void loop() {
       if (currentMillis - alarmStates[i].lastBlinkTime >= ALARM_BLINK_INTERVAL) {
         alarmStates[i].blinkState = !alarmStates[i].blinkState;
         alarmStates[i].lastBlinkTime = currentMillis;
-        displayState.needsRedraw = true;  // 触发重绘以更新报警状态显示
+        displayState.needsRedraw = true;
       }
     }
   }
