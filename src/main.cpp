@@ -10,7 +10,7 @@
 #define KEY1_PIN   35    // K1: 切换显示模式
 #define KEY2_PIN   36    // K2: 上翻
 #define KEY3_PIN   37    // K3: 下翻
-#define KEY4_PIN   38    // K4: 未使用
+#define KEY4_PIN   38    // K4: 屏幕开关
 
 // DS18B20引脚定义
 #define ONEWIRE_BUS 4    // 使用GPIO4作为数据线
@@ -93,8 +93,6 @@ struct DisplayState {
 // 全局变量定义
 int selectedSensor = -1;      // 当前选择的传感器，-1表示显示所有
 int totalSensors = 0;         // 总传感器数量
-unsigned long lastButtonCheck = 0; // 上次按键检查时间
-const int debounceTime = 20;  // 按键防抖时间（毫秒）
 unsigned long lastTempUpdate = 0;  // 上次温度更新时间
 const int tempUpdateInterval = 1000;  // 温度更新间隔（毫秒）
 bool firstDraw = true;      // 首次绘制标志
@@ -110,11 +108,10 @@ DisplayState displayState = {false, -1, MODE_OVERVIEW, {0}, {{false}}};
 TFT_eSPI tft;
 OneWire oneWire(ONEWIRE_BUS);
 DallasTemperature sensors(&oneWire);
-OneButton button1(KEY1_PIN, true, true);
-OneButton button2(KEY2_PIN, true, true);
-OneButton button3(KEY3_PIN, true, true);
-OneButton button4(KEY4_PIN, true, true);
-
+OneButton button1(KEY1_PIN, true);  // 使用内部上拉，启用消抖
+OneButton button2(KEY2_PIN, true);
+OneButton button3(KEY3_PIN, true);
+OneButton button4(KEY4_PIN, true);
 
 // 函数声明
 void drawGraphBackground(int sensorIndex);
@@ -511,13 +508,13 @@ void updateTempRecords() {
   }
 }
 
-// 修改按钮回调函数
+// 修改按键回调函数
 void onButton1Click() {
   currentMode = (DisplayMode)((currentMode + 1) % 3);
   if (currentMode == MODE_OVERVIEW) {
-    selectedSensor = -1;  // 概览模式不选择具体传感器
+    selectedSensor = -1;
   } else if (selectedSensor == -1) {
-    selectedSensor = 0;  // 如果从概览模式切换过来，默认选择第一个传感器
+    selectedSensor = 0;
   }
   displayState.needsRedraw = true;
   Serial.print("切换到模式: ");
@@ -533,7 +530,7 @@ void onButton2Click() {
     }
     displayState.needsRedraw = true;
     Serial.print("选择传感器: ");
-    Serial.println(selectedSensor + 1);  // 显示从1开始的编号
+    Serial.println(selectedSensor + 1);
   }
 }
 
@@ -546,24 +543,22 @@ void onButton3Click() {
     }
     displayState.needsRedraw = true;
     Serial.print("选择传感器: ");
-    Serial.println(selectedSensor + 1);  // 显示从1开始的编号
+    Serial.println(selectedSensor + 1);
   }
 }
 
 void onButton4Click() {
-  screenOn = !screenOn;  // 切换屏幕状态
+  screenOn = !screenOn;
   if (screenOn) {
-    tft.writecommand(0x11);  // 退出睡眠模式
-    delay(120);              // 等待屏幕唤醒
-    tft.writecommand(0x29);  // 开启显示
-    digitalWrite(TFT_BL, HIGH);  // 开启背光
+    tft.writecommand(0x11);
+    delay(120);
+    tft.writecommand(0x29);
+    digitalWrite(TFT_BL, HIGH);
   } else {
-    digitalWrite(TFT_BL, LOW);   // 关闭背光
-    delay(50);                   // 等待背光完全关闭
-    tft.writecommand(0x28);      // 关闭显示
-    tft.writecommand(0x10);      // 进入睡眠模式
+    tft.writecommand(0x10);
+    digitalWrite(TFT_BL, LOW);
   }
-  Serial.print("屏幕已");
+  Serial.print("屏幕状态: ");
   Serial.println(screenOn ? "开启" : "关闭");
 }
 
@@ -573,19 +568,25 @@ void setup() {
   
   // 初始化显示屏
   tft.init();
-  tft.setRotation(0);  // 旋转180度 (0-3: 0°, 90°, 180°, 270°)
+  tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   
   // 初始化背光控制
   pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);  // 默认开启背光
+  digitalWrite(TFT_BL, HIGH);
   
   // 初始化按键
   button1.attachClick(onButton1Click);
   button2.attachClick(onButton2Click);
   button3.attachClick(onButton3Click);
   button4.attachClick(onButton4Click);
+  
+  // 设置按键消抖时间（毫秒）
+  button1.setDebounceTicks(50);
+  button2.setDebounceTicks(50);
+  button3.setDebounceTicks(50);
+  button4.setDebounceTicks(50);
   
   // 初始化温度传感器
   sensors.begin();
