@@ -680,11 +680,6 @@ void loop() {
     }
   }
   
-  // 如果屏幕关闭，只处理按键和屏幕命令
-  if (!screenOn) {
-    return;
-  }
-  
   // 读取温度数据
   readTemperatures();
   
