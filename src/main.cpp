@@ -10,14 +10,27 @@
 // 类型定义
 typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 
+// // 按键定义
+// #define KEY1_PIN   35    // K1: 切换显示模式
+// #define KEY2_PIN   36    // K2: 上翻
+// #define KEY3_PIN   37    // K3: 下翻
+// #define KEY4_PIN   38    // K4: 屏幕开关
+// // DS18B20引脚定义
+// #define ONEWIRE_BUS 4    // 使用GPIO4作为数据线
+
+
+
+
 // 按键定义
-#define KEY1_PIN   35    // K1: 切换显示模式
-#define KEY2_PIN   36    // K2: 上翻
-#define KEY3_PIN   37    // K3: 下翻
-#define KEY4_PIN   38    // K4: 屏幕开关
+#define KEY1_PIN   0    // K1: 切换显示模式
+#define KEY2_PIN   1    // K2: 上翻
+#define KEY3_PIN   8    // K3: 下翻
+#define KEY4_PIN   3    // K4: 屏幕开关
 
 // DS18B20引脚定义
-#define ONEWIRE_BUS 4    // 使用GPIO4作为数据线
+#define ONEWIRE_BUS 20    // 使用GPIO4作为数据线
+
+
 
 // 显示布局参数
 #define SCREEN_WIDTH 128   // 屏幕宽度
@@ -54,6 +67,8 @@ typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 #define TEMP_ALARM_HIGH 30.0  // 高温报警阈值
 #define TEMP_ALARM_LOW 10.0   // 低温报警阈值
 #define ALARM_BLINK_INTERVAL 500  // 报警闪烁间隔（毫秒）
+
+#define TFT_BL 7
 
 // 显示模式枚举
 enum DisplayMode {
