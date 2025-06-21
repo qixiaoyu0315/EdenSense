@@ -20,6 +20,12 @@
 // WiFi功率设置
 #define WIFI_POWER_DBM 8             // WiFi发射功率，单位dBm (范围: 0-20, 建议8-12)
 
+// 电源管理和功耗优化配置
+#define SCREEN_BRIGHTNESS 128        // 屏幕亮度 (0-255, 建议128-180)
+#define MQTT_KEEPALIVE 60            // MQTT保活时间 (秒)
+#define WIFI_SLEEP_DISABLE true      // 禁用WiFi睡眠模式
+#define CPU_FREQ_MHZ 80              // CPU频率 (80MHz降低功耗)
+
 // MQTT配置参数
 #define MQTT_SERVER "ebd16e9d.ala.cn-hangzhou.emqxsl.cn"  // MQTT服务器地址
 #define MQTT_PORT 8883               // MQTT服务器端口
@@ -179,6 +185,8 @@ void checkMQTTStatus();       // 添加MQTT状态检查函数
 void mqttCallback(char* topic, byte* payload, unsigned int length);  // MQTT消息回调函数
 void publishTemperatureData();  // 发布温度数据函数
 String createTemperatureJSON(); // 创建温度JSON数据函数
+void setupPowerManagement();   // 电源管理设置函数
+void monitorPowerStatus();     // 电源状态监控函数
 
 // 添加全局变量存储传感器序列号
 DeviceAddress sensorAddresses[16];  // 存储传感器序列号
@@ -708,6 +716,9 @@ void setup() {
   Serial.begin(115200);
   Serial.println("EdenSense 温度监控系统启动...");
 
+  // 初始化电源管理
+  setupPowerManagement();
+
   // 初始化WiFi
   Serial.println("初始化WiFi...");
   WiFi.mode(WIFI_STA);  // 设置为站点模式
@@ -846,6 +857,9 @@ void loop() {
   if (mqttDataRequested && mqttConnected) {
     publishTemperatureData();
   }
+  
+  // 监控电源状态
+  monitorPowerStatus();
   
   // 处理屏幕命令
   if (screenCommandPending) {
@@ -1279,6 +1293,7 @@ void connectMQTT() {
     
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
     mqttClient.setCallback(mqttCallback);
+    mqttClient.setKeepAlive(MQTT_KEEPALIVE);  // 设置保活时间
     
     mqttConnectStartTime = currentMillis;
     mqttConnectAttempts++;
@@ -1436,4 +1451,75 @@ String createTemperatureJSON() {
   serializeJson(doc, jsonString);
   
   return jsonString;
+}
+
+void setupPowerManagement() {
+  Serial.println("配置电源管理...");
+  
+  // 设置CPU频率为80MHz以降低功耗
+  setCpuFrequencyMhz(CPU_FREQ_MHZ);
+  Serial.print("CPU频率设置为: ");
+  Serial.print(getCpuFrequencyMhz());
+  Serial.println(" MHz");
+  
+  // 配置WiFi电源管理
+  if (WIFI_SLEEP_DISABLE) {
+    WiFi.setSleep(false);  // 禁用WiFi睡眠模式
+    Serial.println("WiFi睡眠模式已禁用");
+  }
+  
+  // 设置屏幕亮度
+  analogWrite(TFT_BL, SCREEN_BRIGHTNESS);
+  Serial.print("屏幕亮度设置为: ");
+  Serial.println(SCREEN_BRIGHTNESS);
+  
+  // 配置ADC衰减器（如果使用电池供电）
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);  // 0-3.3V范围
+  
+  Serial.println("电源管理配置完成");
+}
+
+void monitorPowerStatus() {
+  static unsigned long lastPowerCheck = 0;
+  static int powerCheckCount = 0;
+  unsigned long currentMillis = millis();
+  
+  // 每30秒检查一次电源状态
+  if (currentMillis - lastPowerCheck >= 30000) {
+    lastPowerCheck = currentMillis;
+    powerCheckCount++;
+    
+    // 获取当前电压（如果使用电池供电）
+    // float voltage = analogRead(1) * 2 * 3.3 / 4095.0;  // 分压电路
+    
+    // 检查WiFi连接状态
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("警告: WiFi连接丢失");
+    }
+    
+    // 检查MQTT连接状态
+    if (!mqttConnected) {
+      Serial.println("警告: MQTT连接丢失");
+    }
+    
+    // 每5分钟输出一次状态信息
+    if (powerCheckCount % 10 == 0) {
+      Serial.println("=== 电源状态监控 ===");
+      Serial.print("运行时间: ");
+      Serial.print(currentMillis / 1000);
+      Serial.println(" 秒");
+      Serial.print("CPU频率: ");
+      Serial.print(getCpuFrequencyMhz());
+      Serial.println(" MHz");
+      Serial.print("WiFi状态: ");
+      Serial.println(WiFi.status() == WL_CONNECTED ? "已连接" : "未连接");
+      Serial.print("MQTT状态: ");
+      Serial.println(mqttConnected ? "已连接" : "未连接");
+      Serial.print("可用内存: ");
+      Serial.print(ESP.getFreeHeap());
+      Serial.println(" 字节");
+      Serial.println("==================");
+    }
+  }
 } 
