@@ -6,6 +6,22 @@
 #include <OneButton.h>
 #include <time.h>
 #include <stdio.h>  // 为sprintf添加
+#include <WiFi.h>   // 添加WiFi库
+#include <esp_wifi.h>  // 添加ESP32 WiFi控制库
+
+// WiFi连接参数
+#define WIFI_SSID "MTK_CHEETAH_AP_2.4G"      // 请修改为您的WiFi名称
+#define WIFI_PASSWORD "5680578abc.."  // 请修改为您的WiFi密码
+#define WIFI_TIMEOUT 10000           // WiFi连接超时时间（毫秒）
+
+// WiFi功率设置
+#define WIFI_POWER_DBM 8             // WiFi发射功率，单位dBm (范围: 0-20, 建议8-12)
+
+// WiFi连接状态
+bool wifiConnected = false;
+unsigned long wifiConnectStartTime = 0;
+int wifiConnectAttempts = 0;
+const int MAX_WIFI_ATTEMPTS = 5;
 
 // 类型定义
 typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
@@ -134,6 +150,9 @@ void onButton4Click();
 void checkTemperatureAlarms(int sensorIndex, float temp);
 void updateDisplay();
 void readTemperatures();
+void connectWiFi();           // 添加WiFi连接函数
+void checkWiFiStatus();       // 添加WiFi状态检查函数
+void displayWiFiStatus();     // 添加WiFi状态显示函数
 
 // 添加全局变量存储传感器序列号
 DeviceAddress sensorAddresses[16];  // 存储传感器序列号
@@ -453,6 +472,11 @@ void displayOverview() {
   
   displayState.lastMode = currentMode;
   displayState.needsRedraw = false;
+  
+  // 显示WiFi状态图标
+  if (wifiConnected) {
+    displayWiFiStatus();
+  }
 }
 
 void displayDetailView(int sensorIndex) {
@@ -649,6 +673,20 @@ void setup() {
   Serial.begin(115200);
   Serial.println("EdenSense 温度监控系统启动...");
 
+  // 初始化WiFi
+  Serial.println("初始化WiFi...");
+  WiFi.mode(WIFI_STA);  // 设置为站点模式
+  WiFi.setAutoReconnect(true);  // 启用自动重连
+  
+  // 设置WiFi发射功率为较低值
+  Serial.print("设置WiFi发射功率为: ");
+  Serial.print(WIFI_POWER_DBM);
+  Serial.println(" dBm");
+  esp_wifi_set_max_tx_power(WIFI_POWER_DBM * 4);  // ESP32使用0.25dBm为单位
+  
+  // 开始WiFi连接
+  connectWiFi();
+
   // 初始化温度传感器
   sensors.begin();
   totalSensors = sensors.getDeviceCount();
@@ -751,6 +789,13 @@ void loop() {
   button3.tick();
   button4.tick();
   
+  // WiFi连接和状态检查
+  if (!wifiConnected) {
+    connectWiFi();
+  } else {
+    checkWiFiStatus();
+  }
+  
   // 处理屏幕命令
   if (screenCommandPending) {
     if (screenCommandType) {  // 开启屏幕
@@ -773,6 +818,11 @@ void loop() {
   
   // 立即处理显示更新（按键触发）
   updateDisplay();
+  
+  // 显示WiFi状态图标
+  if (wifiConnected) {
+    displayWiFiStatus();
+  }
   
   // 处理报警闪烁
   for (int i = 0; i < totalSensors; i++) {
@@ -952,5 +1002,165 @@ void readTemperatures() {
       
       tempReadPending = false;
     }
+  }
+}
+
+// WiFi连接函数
+void connectWiFi() {
+  if (wifiConnected) {
+    return;  // 如果已经连接，直接返回
+  }
+  
+  unsigned long currentMillis = millis();
+  
+  // 如果是第一次尝试连接或重连
+  if (wifiConnectStartTime == 0) {
+    Serial.println("开始连接WiFi...");
+    Serial.print("SSID: ");
+    Serial.println(WIFI_SSID);
+    
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    wifiConnectStartTime = currentMillis;
+    wifiConnectAttempts++;
+    
+    // 在屏幕上显示连接状态
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.setTextSize(1);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("正在连接WiFi...", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
+    tft.drawString(WIFI_SSID, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10);
+  }
+  
+  // 检查连接状态
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    wifiConnectStartTime = 0;
+    wifiConnectAttempts = 0;
+    
+    Serial.println("WiFi连接成功！");
+    Serial.print("IP地址: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("信号强度: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+    
+    // 在屏幕上显示连接成功信息
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.setTextSize(1);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("WiFi连接成功", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 20);
+    tft.drawString("IP: " + WiFi.localIP().toString(), SCREEN_WIDTH/2, SCREEN_HEIGHT/2);
+    tft.drawString("信号: " + String(WiFi.RSSI()) + " dBm", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 20);
+    
+    // 延迟2秒后恢复正常显示
+    delay(2000);
+    displayState.needsRedraw = true;
+    
+  } else if (currentMillis - wifiConnectStartTime > WIFI_TIMEOUT) {
+    // 连接超时
+    Serial.println("WiFi连接超时");
+    
+    if (wifiConnectAttempts < MAX_WIFI_ATTEMPTS) {
+      Serial.print("重试连接 (");
+      Serial.print(wifiConnectAttempts);
+      Serial.print("/");
+      Serial.print(MAX_WIFI_ATTEMPTS);
+      Serial.println(")");
+      
+      // 在屏幕上显示重试信息
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+      tft.setTextSize(1);
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString("WiFi连接超时", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
+      tft.drawString("重试中...", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10);
+      
+      // 重新开始连接
+      WiFi.disconnect();
+      delay(1000);
+      wifiConnectStartTime = 0;
+    } else {
+      // 达到最大重试次数
+      Serial.println("WiFi连接失败，达到最大重试次数");
+      
+      // 在屏幕上显示连接失败信息
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.setTextSize(1);
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString("WiFi连接失败", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
+      tft.drawString("请检查网络设置", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10);
+      
+      // 延迟3秒后恢复正常显示
+      delay(3000);
+      displayState.needsRedraw = true;
+      
+      // 重置连接状态
+      wifiConnectStartTime = 0;
+      wifiConnectAttempts = 0;
+    }
+  }
+}
+
+// WiFi状态检查函数
+void checkWiFiStatus() {
+  if (wifiConnected && WiFi.status() != WL_CONNECTED) {
+    // WiFi连接丢失
+    Serial.println("WiFi连接丢失");
+    wifiConnected = false;
+    displayState.needsRedraw = true;
+  }
+}
+
+// WiFi状态显示函数
+void displayWiFiStatus() {
+  if (!wifiConnected) {
+    return;  // 如果WiFi未连接，不显示状态
+  }
+  
+  static int lastRSSI = -100;
+  static unsigned long lastUpdateTime = 0;
+  unsigned long currentMillis = millis();
+  
+  // 只在信号强度变化或每5秒更新一次
+  int currentRSSI = WiFi.RSSI();
+  if (currentRSSI == lastRSSI && currentMillis - lastUpdateTime < 5000) {
+    return;
+  }
+  
+  lastRSSI = currentRSSI;
+  lastUpdateTime = currentMillis;
+  
+  // 在屏幕右上角显示WiFi状态图标
+  int iconX = SCREEN_WIDTH - 15;
+  int iconY = 5;
+  
+  // 根据信号强度选择颜色
+  uint16_t color;
+  
+  if (currentRSSI >= -50) {
+    color = TFT_GREEN;  // 信号强
+  } else if (currentRSSI >= -70) {
+    color = TFT_YELLOW; // 信号中等
+  } else {
+    color = TFT_RED;    // 信号弱
+  }
+  
+  // 绘制WiFi图标（简化的信号强度条）
+  int bars = 0;
+  if (currentRSSI >= -50) bars = 4;
+  else if (currentRSSI >= -60) bars = 3;
+  else if (currentRSSI >= -70) bars = 2;
+  else if (currentRSSI >= -80) bars = 1;
+  
+  // 清除图标区域
+  tft.fillRect(iconX - 8, iconY, 10, 10, TFT_BLACK);
+  
+  for (int i = 0; i < bars; i++) {
+    int barHeight = (i + 1) * 2;
+    int barY = iconY + 8 - barHeight;
+    tft.fillRect(iconX - i * 2, barY, 2, barHeight, color);
   }
 } 
