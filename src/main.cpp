@@ -8,6 +8,9 @@
 #include <stdio.h>  // 为sprintf添加
 #include <WiFi.h>   // 添加WiFi库
 #include <esp_wifi.h>  // 添加ESP32 WiFi控制库
+#include <PubSubClient.h>  // 添加MQTT客户端库
+#include <ArduinoJson.h>   // 添加JSON库
+#include <WiFiClientSecure.h>  // 添加SSL客户端库
 
 // WiFi连接参数
 #define WIFI_SSID "MTK_CHEETAH_AP_2.4G"      // 请修改为您的WiFi名称
@@ -17,11 +20,27 @@
 // WiFi功率设置
 #define WIFI_POWER_DBM 8             // WiFi发射功率，单位dBm (范围: 0-20, 建议8-12)
 
+// MQTT配置参数
+#define MQTT_SERVER "ebd16e9d.ala.cn-hangzhou.emqxsl.cn"  // MQTT服务器地址
+#define MQTT_PORT 8883               // MQTT服务器端口
+#define MQTT_CLIENT_ID "esp32c3print"  // MQTT客户端ID
+#define MQTT_USERNAME "esp32c3print"             // MQTT用户名（如果需要）
+#define MQTT_PASSWORD "yjMMjxnbcPNifc8"             // MQTT密码（如果需要）
+#define MQTT_SUBSCRIBE_TOPIC "testtopic"  // 订阅主题
+#define MQTT_PUBLISH_TOPIC "testtopic"       // 发布主题
+
 // WiFi连接状态
 bool wifiConnected = false;
 unsigned long wifiConnectStartTime = 0;
 int wifiConnectAttempts = 0;
 const int MAX_WIFI_ATTEMPTS = 5;
+
+// MQTT连接状态
+bool mqttConnected = false;
+unsigned long mqttConnectStartTime = 0;
+int mqttConnectAttempts = 0;
+const int MAX_MQTT_ATTEMPTS = 5;
+bool mqttDataRequested = false;  // 标记是否需要发送数据
 
 // 类型定义
 typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
@@ -153,6 +172,11 @@ void readTemperatures();
 void connectWiFi();           // 添加WiFi连接函数
 void checkWiFiStatus();       // 添加WiFi状态检查函数
 void displayWiFiStatus();     // 添加WiFi状态显示函数
+void connectMQTT();           // 添加MQTT连接函数
+void checkMQTTStatus();       // 添加MQTT状态检查函数
+void mqttCallback(char* topic, byte* payload, unsigned int length);  // MQTT消息回调函数
+void publishTemperatureData();  // 发布温度数据函数
+String createTemperatureJSON(); // 创建温度JSON数据函数
 
 // 添加全局变量存储传感器序列号
 DeviceAddress sensorAddresses[16];  // 存储传感器序列号
@@ -211,6 +235,12 @@ OneButton button1(KEY1_PIN, true);  // 使用内部上拉，启用消抖
 OneButton button2(KEY2_PIN, true);
 OneButton button3(KEY3_PIN, true);
 OneButton button4(KEY4_PIN, true);
+
+WiFiClientSecure espClient;  // 使用SSL客户端
+PubSubClient mqttClient(espClient);
+
+// SSL配置（用于EMQX云服务）
+#define MQTT_USE_SSL true  // 启用SSL连接
 
 // 函数实现
 void drawGraphBackground(int sensorIndex) {
@@ -686,6 +716,10 @@ void setup() {
   
   // 开始WiFi连接
   connectWiFi();
+  
+  // 初始化MQTT（在WiFi连接成功后）
+  Serial.println("初始化MQTT客户端...");
+  mqttClient.setBufferSize(8192);  // 设置缓冲区大小为8KB
 
   // 初始化温度传感器
   sensors.begin();
@@ -794,6 +828,18 @@ void loop() {
     connectWiFi();
   } else {
     checkWiFiStatus();
+    
+    // WiFi连接成功后，处理MQTT
+    if (!mqttConnected) {
+      connectMQTT();
+    } else {
+      checkMQTTStatus();
+    }
+  }
+  
+  // 处理MQTT数据请求
+  if (mqttDataRequested && mqttConnected) {
+    publishTemperatureData();
   }
   
   // 处理屏幕命令
@@ -1163,4 +1209,177 @@ void displayWiFiStatus() {
     int barY = iconY + 8 - barHeight;
     tft.fillRect(iconX - i * 2, barY, 2, barHeight, color);
   }
+}
+
+void connectMQTT() {
+  if (mqttConnected || !wifiConnected) {
+    return;  // 如果已经连接或WiFi未连接，直接返回
+  }
+  
+  unsigned long currentMillis = millis();
+  
+  // 如果是第一次尝试连接或重连
+  if (mqttConnectStartTime == 0) {
+    Serial.println("开始连接MQTT服务器...");
+    Serial.print("服务器: ");
+    Serial.print(MQTT_SERVER);
+    Serial.print(":");
+    Serial.println(MQTT_PORT);
+    
+    // 配置SSL（用于EMQX云服务）
+    if (MQTT_USE_SSL) {
+      Serial.println("配置SSL连接...");
+      espClient.setCACert(NULL);  // 不验证服务器证书
+      espClient.setInsecure();    // 允许不安全的连接
+    }
+    
+    mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+    mqttClient.setCallback(mqttCallback);
+    
+    mqttConnectStartTime = currentMillis;
+    mqttConnectAttempts++;
+  }
+  
+  // 尝试连接MQTT服务器
+  if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD)) {
+    mqttConnected = true;
+    mqttConnectStartTime = 0;
+    mqttConnectAttempts = 0;
+    
+    Serial.println("MQTT连接成功！");
+    
+    // 订阅命令主题
+    if (mqttClient.subscribe(MQTT_SUBSCRIBE_TOPIC)) {
+      Serial.print("成功订阅主题: ");
+      Serial.println(MQTT_SUBSCRIBE_TOPIC);
+    } else {
+      Serial.println("订阅主题失败");
+    }
+    
+  } else {
+    // 连接失败
+    Serial.print("MQTT连接失败，错误代码: ");
+    Serial.println(mqttClient.state());
+    
+    if (currentMillis - mqttConnectStartTime > 5000) {  // 5秒超时
+      if (mqttConnectAttempts < MAX_MQTT_ATTEMPTS) {
+        Serial.print("重试MQTT连接 (");
+        Serial.print(mqttConnectAttempts);
+        Serial.print("/");
+        Serial.print(MAX_MQTT_ATTEMPTS);
+        Serial.println(")");
+        
+        mqttConnectStartTime = 0;  // 重置时间，准备重试
+      } else {
+        Serial.println("MQTT连接失败，达到最大重试次数");
+        mqttConnectStartTime = 0;
+        mqttConnectAttempts = 0;
+      }
+    }
+  }
+}
+
+void checkMQTTStatus() {
+  if (mqttConnected) {
+    // 检查MQTT连接状态
+    if (!mqttClient.connected()) {
+      Serial.println("MQTT连接丢失");
+      mqttConnected = false;
+      mqttConnectStartTime = 0;  // 重置连接时间，准备重连
+    } else {
+      // 处理MQTT消息
+      mqttClient.loop();
+    }
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  // 将接收到的消息转换为字符串
+  String message = "";
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  
+  Serial.print("收到MQTT消息 [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  Serial.println(message);
+  
+  // 检查是否是refresh命令
+  if (message == "refresh") {
+    Serial.println("收到refresh命令，准备发送温度数据");
+    mqttDataRequested = true;  // 标记需要发送数据
+  }
+}
+
+void publishTemperatureData() {
+  if (!mqttConnected) {
+    Serial.println("MQTT未连接，无法发送数据");
+    return;
+  }
+  
+  if (!mqttDataRequested) {
+    return;  // 如果没有请求数据，不发送
+  }
+  
+  Serial.println("开始创建温度数据JSON...");
+  
+  // 创建JSON数据
+  String jsonData = createTemperatureJSON();
+  
+  Serial.print("JSON数据长度: ");
+  Serial.println(jsonData.length());
+  Serial.println("JSON数据内容:");
+  Serial.println(jsonData);
+  
+  // 发布数据到MQTT主题
+  if (mqttClient.publish(MQTT_PUBLISH_TOPIC, jsonData.c_str())) {
+    Serial.print("成功发布数据到主题: ");
+    Serial.println(MQTT_PUBLISH_TOPIC);
+  } else {
+    Serial.println("发布数据失败");
+  }
+  
+  // 重置请求标记
+  mqttDataRequested = false;
+}
+
+String createTemperatureJSON() {
+  DynamicJsonDocument doc(8192);  // 分配8KB内存用于JSON文档
+  
+  // 为每个传感器创建数据
+  for (int i = 0; i < totalSensors; i++) {
+    String sensorKey = "T" + String(i + 1);
+    
+    // 创建传感器对象
+    JsonObject sensorObj = doc.createNestedObject(sensorKey);
+    
+    // 添加当前温度
+    float currentTemp = currentTemps[i];
+    if (currentTemp != DEVICE_DISCONNECTED_C) {
+      sensorObj["c_t"] = String(currentTemp, 1);
+    } else {
+      sensorObj["c_t"] = "null";
+    }
+    
+    // 添加历史温度数组
+    JsonArray historyArray = sensorObj.createNestedArray("l_t");
+    
+    // 获取历史温度数据
+    TempRecord& record = sensorRecords[i];
+    for (int j = 0; j < record.recordCount; j++) {
+      float temp = record.temps[j];
+      if (temp != DEVICE_DISCONNECTED_C) {
+        historyArray.add(temp);
+      } else {
+        historyArray.add(0.0);  // 对于无效数据使用0
+      }
+    }
+  }
+  
+  // 序列化JSON为字符串
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  return jsonString;
 } 
