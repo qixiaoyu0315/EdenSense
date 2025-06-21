@@ -90,7 +90,8 @@ typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 // 温度记录相关定义
 #define MAX_RECORDS 120  // 保持120个数据点
 #define TEMP_UPDATE_INTERVAL 5000  // 温度显示更新间隔（1秒）
-#define TEMP_STORE_INTERVAL 720000  // 温度存储间隔（12分钟，单位：毫秒）
+// #define TEMP_STORE_INTERVAL 720000  // 温度存储间隔（12分钟，单位：毫秒）
+#define TEMP_STORE_INTERVAL 5000  // 温度存储间隔（12分钟，单位：毫秒）
 
 #define TEMP_MIN 10.0  // 最小温度刻度
 #define TEMP_MAX 45.0  // 最大温度刻度
@@ -172,6 +173,7 @@ void readTemperatures();
 void connectWiFi();           // 添加WiFi连接函数
 void checkWiFiStatus();       // 添加WiFi状态检查函数
 void displayWiFiStatus();     // 添加WiFi状态显示函数
+void displayMQTTStatus();     // 添加MQTT状态显示函数
 void connectMQTT();           // 添加MQTT连接函数
 void checkMQTTStatus();       // 添加MQTT状态检查函数
 void mqttCallback(char* topic, byte* payload, unsigned int length);  // MQTT消息回调函数
@@ -507,6 +509,9 @@ void displayOverview() {
   if (wifiConnected) {
     displayWiFiStatus();
   }
+  
+  // 显示MQTT状态图标
+  displayMQTTStatus();
 }
 
 void displayDetailView(int sensorIndex) {
@@ -870,6 +875,9 @@ void loop() {
     displayWiFiStatus();
   }
   
+  // 显示MQTT状态图标
+  displayMQTTStatus();
+  
   // 处理报警闪烁
   for (int i = 0; i < totalSensors; i++) {
     if (alarmStates[i].highAlarm || alarmStates[i].lowAlarm) {
@@ -1179,8 +1187,8 @@ void displayWiFiStatus() {
   lastRSSI = currentRSSI;
   lastUpdateTime = currentMillis;
   
-  // 在屏幕右上角显示WiFi状态图标
-  int iconX = SCREEN_WIDTH - 15;
+  // 在屏幕左上角显示WiFi状态图标
+  int iconX = 15;  // 改为左侧
   int iconY = 5;
   
   // 根据信号强度选择颜色
@@ -1207,7 +1215,43 @@ void displayWiFiStatus() {
   for (int i = 0; i < bars; i++) {
     int barHeight = (i + 1) * 2;
     int barY = iconY + 8 - barHeight;
-    tft.fillRect(iconX - i * 2, barY, 2, barHeight, color);
+    tft.fillRect(iconX + i * 2, barY, 2, barHeight, color);  // 改为从左到右绘制
+  }
+}
+
+// MQTT状态显示函数
+void displayMQTTStatus() {
+  static bool lastMQTTStatus = false;
+  static unsigned long lastUpdateTime = 0;
+  unsigned long currentMillis = millis();
+  
+  // 只在状态变化或每3秒更新一次
+  if (mqttConnected == lastMQTTStatus && currentMillis - lastUpdateTime < 3000) {
+    return;
+  }
+  
+  lastMQTTStatus = mqttConnected;
+  lastUpdateTime = currentMillis;
+  
+  // 在屏幕右上角显示MQTT状态
+  int iconX = SCREEN_WIDTH - 15;
+  int iconY = 5;
+  
+  // 清除图标区域
+  tft.fillRect(iconX - 8, iconY, 10, 10, TFT_BLACK);
+  
+  // 设置文本属性
+  tft.setTextSize(1);
+  tft.setTextDatum(MC_DATUM);
+  
+  if (mqttConnected) {
+    // 显示绿色"M"表示MQTT已连接
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.drawString("M", iconX, iconY + 5);
+  } else {
+    // 显示红色"M"表示MQTT未连接
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.drawString("M", iconX, iconY + 5);
   }
 }
 
@@ -1349,7 +1393,17 @@ String createTemperatureJSON() {
   
   // 为每个传感器创建数据
   for (int i = 0; i < totalSensors; i++) {
-    String sensorKey = "T" + String(i + 1);
+    // 生成序列号显示
+    String shortAddr;
+    shortAddr.reserve(8);
+    for (int j = 4; j < 8; j++) {
+      char hex[3];
+      sprintf(hex, "%02X", sensorAddresses[i][j]);
+      shortAddr += hex;
+    }
+    
+    // 创建传感器标识符：T1-序列号格式
+    String sensorKey = "T" + String(i + 1) + "-" + shortAddr;
     
     // 创建传感器对象
     JsonObject sensorObj = doc.createNestedObject(sensorKey);
@@ -1357,7 +1411,7 @@ String createTemperatureJSON() {
     // 添加当前温度
     float currentTemp = currentTemps[i];
     if (currentTemp != DEVICE_DISCONNECTED_C) {
-      sensorObj["c_t"] = String(currentTemp, 1);
+      sensorObj["c_t"] = String(currentTemp, 1);  // 保留1位小数
     } else {
       sensorObj["c_t"] = "null";
     }
@@ -1370,7 +1424,7 @@ String createTemperatureJSON() {
     for (int j = 0; j < record.recordCount; j++) {
       float temp = record.temps[j];
       if (temp != DEVICE_DISCONNECTED_C) {
-        historyArray.add(temp);
+        historyArray.add(round(temp * 10) / 10.0);  // 保留1位小数
       } else {
         historyArray.add(0.0);  // 对于无效数据使用0
       }
