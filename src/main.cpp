@@ -110,7 +110,7 @@ typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 #define TEMP_ALARM_LOW 10.0   // 低温报警阈值
 #define ALARM_BLINK_INTERVAL 500  // 报警闪烁间隔（毫秒）
 
-#define TFT_BL 7
+// #define TFT_BL 5
 
 // 显示模式枚举
 enum DisplayMode {
@@ -888,13 +888,15 @@ void loop() {
   // 立即处理显示更新（按键触发）
   updateDisplay();
   
-  // 显示WiFi状态图标
-  if (wifiConnected) {
+  // 显示WiFi状态图标（仅在屏幕开启时）
+  if (wifiConnected && screenOn) {
     displayWiFiStatus();
   }
   
-  // 显示MQTT状态图标
-  displayMQTTStatus();
+  // 显示MQTT状态图标（仅在屏幕开启时）
+  if (screenOn) {
+    displayMQTTStatus();
+  }
   
   // 处理报警闪烁
   for (int i = 0; i < totalSensors; i++) {
@@ -902,7 +904,10 @@ void loop() {
       if (currentMillis - alarmStates[i].lastBlinkTime >= ALARM_BLINK_INTERVAL) {
         alarmStates[i].blinkState = !alarmStates[i].blinkState;
         alarmStates[i].lastBlinkTime = currentMillis;
-        displayNeedsUpdate = true;
+        // 仅在屏幕开启时触发显示更新
+        if (screenOn) {
+          displayNeedsUpdate = true;
+        }
       }
     }
   }
@@ -929,6 +934,11 @@ void checkTemperatureAlarms(int sensorIndex, float temp) {
 
 // 添加显示更新函数
 void updateDisplay() {
+  // 如果屏幕关闭，不执行显示更新
+  if (!screenOn) {
+    return;
+  }
+  
   if (!displayNeedsUpdate && !displayState.needsRedraw) {
     return;  // 如果没有需要更新的内容，直接返回
   }
@@ -1062,7 +1072,10 @@ void readTemperatures() {
           // 检查报警状态
           checkTemperatureAlarms(i, tempC);
           if (alarmStates[i].highAlarm || alarmStates[i].lowAlarm) {
-            displayNeedsUpdate = true;
+            // 仅在屏幕开启时触发显示更新
+            if (screenOn) {
+              displayNeedsUpdate = true;
+            }
           }
         }
       }
@@ -1096,13 +1109,15 @@ void connectWiFi() {
     wifiConnectStartTime = currentMillis;
     wifiConnectAttempts++;
     
-    // 在屏幕上显示连接状态
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.setTextSize(1);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString("正在连接WiFi...", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
-    tft.drawString(WIFI_SSID, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10);
+    // 在屏幕上显示连接状态（仅在屏幕开启时）
+    if (screenOn) {
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+      tft.setTextSize(1);
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString("正在连接WiFi...", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
+      tft.drawString(WIFI_SSID, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10);
+    }
   }
   
   // 检查连接状态
@@ -1118,19 +1133,20 @@ void connectWiFi() {
     Serial.print(WiFi.RSSI());
     Serial.println(" dBm");
     
-    // 在屏幕上显示连接成功信息
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.setTextSize(1);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString("WiFi连接成功", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 20);
-    tft.drawString("IP: " + WiFi.localIP().toString(), SCREEN_WIDTH/2, SCREEN_HEIGHT/2);
-    tft.drawString("信号: " + String(WiFi.RSSI()) + " dBm", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 20);
-    
-    // 延迟2秒后恢复正常显示
-    delay(2000);
-    displayState.needsRedraw = true;
-    
+    // 在屏幕上显示连接成功信息（仅在屏幕开启时）
+    if (screenOn) {
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(TFT_GREEN, TFT_BLACK);
+      tft.setTextSize(1);
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString("WiFi连接成功", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 20);
+      tft.drawString("IP: " + WiFi.localIP().toString(), SCREEN_WIDTH/2, SCREEN_HEIGHT/2);
+      tft.drawString("信号: " + String(WiFi.RSSI()) + " dBm", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 20);
+      
+      // 延迟2秒后恢复正常显示
+      delay(2000);
+      displayState.needsRedraw = true;
+    }
   } else if (currentMillis - wifiConnectStartTime > WIFI_TIMEOUT) {
     // 连接超时
     Serial.println("WiFi连接超时");
@@ -1142,13 +1158,15 @@ void connectWiFi() {
       Serial.print(MAX_WIFI_ATTEMPTS);
       Serial.println(")");
       
-      // 在屏幕上显示重试信息
-      tft.fillScreen(TFT_BLACK);
-      tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-      tft.setTextSize(1);
-      tft.setTextDatum(MC_DATUM);
-      tft.drawString("WiFi连接超时", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
-      tft.drawString("重试中...", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10);
+      // 在屏幕上显示重试信息（仅在屏幕开启时）
+      if (screenOn) {
+        tft.fillScreen(TFT_BLACK);
+        tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+        tft.setTextSize(1);
+        tft.setTextDatum(MC_DATUM);
+        tft.drawString("WiFi连接超时", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
+        tft.drawString("重试中...", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10);
+      }
       
       // 重新开始连接
       WiFi.disconnect();
@@ -1183,7 +1201,10 @@ void checkWiFiStatus() {
     // WiFi连接丢失
     Serial.println("WiFi连接丢失");
     wifiConnected = false;
-    displayState.needsRedraw = true;
+    // 仅在屏幕开启时触发显示重绘
+    if (screenOn) {
+      displayState.needsRedraw = true;
+    }
   }
 }
 
@@ -1459,30 +1480,24 @@ String createTemperatureJSON() {
 }
 
 void setupPowerManagement() {
-  Serial.println("配置电源管理...");
-  
   // 设置CPU频率为80MHz以降低功耗
   setCpuFrequencyMhz(CPU_FREQ_MHZ);
-  Serial.print("CPU频率设置为: ");
-  Serial.print(ESP.getCpuFreqMHz());
-  Serial.println(" MHz");
   
-  // 配置WiFi电源管理
+  // 禁用WiFi睡眠模式
   if (WIFI_SLEEP_DISABLE) {
-    WiFi.setSleep(false);  // 禁用WiFi睡眠模式
-    Serial.println("WiFi睡眠模式已禁用");
+    esp_wifi_set_ps(WIFI_PS_NONE);
   }
   
-  // 设置屏幕亮度
-  analogWrite(TFT_BL, SCREEN_BRIGHTNESS);
-  Serial.print("屏幕亮度设置为: ");
-  Serial.println(SCREEN_BRIGHTNESS);
+  // 初始化背光控制引脚
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);  // 使用数字控制而不是PWM
   
-  // 配置ADC衰减器（如果使用电池供电）
-  analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);  // 0-3.3V范围
-  
-  Serial.println("电源管理配置完成");
+  Serial.println("电源管理初始化完成");
+  Serial.print("CPU频率: ");
+  Serial.print(getCpuFrequencyMhz());
+  Serial.println(" MHz");
+  Serial.print("WiFi睡眠模式: ");
+  Serial.println(WIFI_SLEEP_DISABLE ? "禁用" : "启用");
 }
 
 void monitorPowerStatus() {
