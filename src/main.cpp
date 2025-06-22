@@ -65,7 +65,7 @@ typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 // 按键定义
 #define KEY1_PIN   0    // K1: 切换显示模式
 #define KEY2_PIN   1    // K2: 上翻
-#define KEY3_PIN   8    // K3: 下翻
+#define KEY3_PIN   2    // K3: 下翻
 #define KEY4_PIN   3    // K4: 屏幕开关
 
 // DS18B20引脚定义
@@ -187,6 +187,7 @@ void publishTemperatureData();  // 发布温度数据函数
 String createTemperatureJSON(); // 创建温度JSON数据函数
 void setupPowerManagement();   // 电源管理设置函数
 void monitorPowerStatus();     // 电源状态监控函数
+void printSystemInfo();        // 打印系统信息函数
 
 // 添加全局变量存储传感器序列号
 DeviceAddress sensorAddresses[16];  // 存储传感器序列号
@@ -861,6 +862,9 @@ void loop() {
   // 监控电源状态
   monitorPowerStatus();
   
+  // 打印系统信息
+  printSystemInfo();
+  
   // 处理屏幕命令
   if (screenCommandPending) {
     if (screenCommandType) {  // 开启屏幕
@@ -1088,6 +1092,7 @@ void connectWiFi() {
     Serial.println(WIFI_SSID);
     
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     wifiConnectStartTime = currentMillis;
     wifiConnectAttempts++;
     
@@ -1459,7 +1464,7 @@ void setupPowerManagement() {
   // 设置CPU频率为80MHz以降低功耗
   setCpuFrequencyMhz(CPU_FREQ_MHZ);
   Serial.print("CPU频率设置为: ");
-  Serial.print(getCpuFrequencyMhz());
+  Serial.print(ESP.getCpuFreqMHz());
   Serial.println(" MHz");
   
   // 配置WiFi电源管理
@@ -1510,7 +1515,7 @@ void monitorPowerStatus() {
       Serial.print(currentMillis / 1000);
       Serial.println(" 秒");
       Serial.print("CPU频率: ");
-      Serial.print(getCpuFrequencyMhz());
+      Serial.print(ESP.getCpuFreqMHz());
       Serial.println(" MHz");
       Serial.print("WiFi状态: ");
       Serial.println(WiFi.status() == WL_CONNECTED ? "已连接" : "未连接");
@@ -1521,5 +1526,104 @@ void monitorPowerStatus() {
       Serial.println(" 字节");
       Serial.println("==================");
     }
+  }
+}
+
+void printSystemInfo() {
+  static unsigned long lastPrintTime = 0;
+  unsigned long currentMillis = millis();
+  
+  // 每秒打印一次
+  if (currentMillis - lastPrintTime >= 1000) {
+    lastPrintTime = currentMillis;
+    
+    Serial.println("\n=== 系统信息 ===");
+    Serial.print("运行时间: ");
+    Serial.print(currentMillis / 1000);
+    Serial.println(" 秒");
+    
+    // 内存信息
+    Serial.print("可用内存: ");
+    Serial.print(ESP.getFreeHeap());
+    Serial.println(" 字节");
+    Serial.print("最小可用内存: ");
+    Serial.print(ESP.getMinFreeHeap());
+    Serial.println(" 字节");
+    Serial.print("最大分配块: ");
+    Serial.print(ESP.getMaxAllocHeap());
+    Serial.println(" 字节");
+    
+    // CPU信息
+    Serial.print("CPU频率: ");
+    Serial.print(ESP.getCpuFreqMHz());
+    Serial.println(" MHz");
+    
+    // WiFi信息
+    Serial.print("WiFi状态: ");
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("已连接");
+      Serial.print("IP地址: ");
+      Serial.println(WiFi.localIP());
+      Serial.print("信号强度: ");
+      Serial.print(WiFi.RSSI());
+      Serial.println(" dBm");
+    } else {
+      Serial.println("未连接");
+    }
+    
+    // MQTT信息
+    Serial.print("MQTT状态: ");
+    Serial.println(mqttConnected ? "已连接" : "未连接");
+    
+    // 屏幕信息
+    Serial.print("屏幕状态: ");
+    Serial.println(screenOn ? "开启" : "关闭");
+    
+    // 传感器信息
+    Serial.print("传感器数量: ");
+    Serial.println(totalSensors);
+    for (int i = 0; i < totalSensors; i++) {
+      Serial.print("T");
+      Serial.print(i + 1);
+      Serial.print(": ");
+      if (currentTemps[i] != DEVICE_DISCONNECTED_C) {
+        Serial.print(currentTemps[i], 1);
+        Serial.println("°C");
+      } else {
+        Serial.println("未连接");
+      }
+    }
+    
+    // 显示模式信息
+    Serial.print("显示模式: ");
+    switch (currentMode) {
+      case MODE_OVERVIEW:
+        Serial.println("概览模式");
+        break;
+      case MODE_DETAIL:
+        Serial.println("详情模式");
+        break;
+      case MODE_GRAPH:
+        Serial.println("图表模式");
+        break;
+    }
+    
+    // 按键状态
+    Serial.print("按键状态: K1=");
+    Serial.print(digitalRead(KEY1_PIN));
+    Serial.print(" K2=");
+    Serial.print(digitalRead(KEY2_PIN));
+    Serial.print(" K3=");
+    Serial.print(digitalRead(KEY3_PIN));
+    Serial.print(" K4=");
+    Serial.println(digitalRead(KEY4_PIN));
+    
+    // 背光状态
+    Serial.print("背光引脚(GPIO");
+    Serial.print(TFT_BL);
+    Serial.print(")状态: ");
+    Serial.println(digitalRead(TFT_BL) ? "HIGH" : "LOW");
+    
+    Serial.println("================\n");
   }
 } 
