@@ -21,7 +21,7 @@
 #define WIFI_POWER_DBM 8             // WiFi发射功率，单位dBm (范围: 0-20, 建议8-12)
 
 // 电源管理和功耗优化配置
-#define SCREEN_BRIGHTNESS 128        // 屏幕亮度 (0-255, 建议128-180)
+#define SCREEN_BRIGHTNESS 180        // 屏幕亮度 (0-255, 建议128-180)
 #define MQTT_KEEPALIVE 60            // MQTT保活时间 (秒)
 #define WIFI_SLEEP_DISABLE true      // 禁用WiFi睡眠模式
 #define CPU_FREQ_MHZ 80              // CPU频率 (80MHz降低功耗)
@@ -35,6 +35,12 @@
 #define MQTT_SUBSCRIBE_TOPIC "testtopic"  // 订阅主题
 #define MQTT_PUBLISH_TOPIC "testtopic"       // 发布主题
 
+// NTP时间同步配置
+#define NTP_SERVER "pool.ntp.org"     // NTP服务器
+#define NTP_GMT_OFFSET 8              // 时区偏移（小时），中国为UTC+8
+#define NTP_DAYLIGHT_OFFSET 0         // 夏令时偏移（小时）
+#define NTP_UPDATE_INTERVAL 3600000   // NTP更新时间间隔（毫秒），1小时更新一次
+
 // WiFi连接状态
 bool wifiConnected = false;
 unsigned long wifiConnectStartTime = 0;
@@ -47,6 +53,11 @@ unsigned long mqttConnectStartTime = 0;
 int mqttConnectAttempts = 0;
 const int MAX_MQTT_ATTEMPTS = 5;
 bool mqttDataRequested = false;  // 标记是否需要发送数据
+
+// 时间同步状态
+bool timeSynced = false;         // 时间是否已同步
+unsigned long lastNTPUpdate = 0; // 上次NTP更新时间
+time_t lastRealTime = 0;         // 上次获取的真实时间
 
 // 类型定义
 typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
@@ -96,8 +107,8 @@ typedef uint8_t DeviceAddress[8];  // 添加DeviceAddress类型定义
 // 温度记录相关定义
 #define MAX_RECORDS 120  // 保持120个数据点
 #define TEMP_UPDATE_INTERVAL 5000  // 温度显示更新间隔（1秒）
-// #define TEMP_STORE_INTERVAL 720000  // 温度存储间隔（12分钟，单位：毫秒）
-#define TEMP_STORE_INTERVAL 5000  // 温度存储间隔（12分钟，单位：毫秒）
+#define TEMP_STORE_INTERVAL 720000  // 温度存储间隔（12分钟，单位：毫秒）
+// #define TEMP_STORE_INTERVAL 5000  // 温度存储间隔（12分钟，单位：毫秒）
 
 #define TEMP_MIN 10.0  // 最小温度刻度
 #define TEMP_MAX 45.0  // 最大温度刻度
@@ -129,6 +140,7 @@ struct TempRecord {
   float maxTemp;    // 最大温度
   float avgTemp;    // 平均温度
   unsigned long lastStatsUpdate;  // 上次统计数据更新时间
+  time_t lastRealTime;  // 最后一次更新时的真实时间戳
 };
 
 // 图表状态结构
@@ -188,6 +200,10 @@ String createTemperatureJSON(); // 创建温度JSON数据函数
 void setupPowerManagement();   // 电源管理设置函数
 void monitorPowerStatus();     // 电源状态监控函数
 void printSystemInfo();        // 打印系统信息函数
+void setupTimeSync();          // 时间同步设置函数
+void syncTime();               // 时间同步函数
+time_t getCurrentRealTime();   // 获取当前真实时间函数
+String formatRealTime(time_t timestamp); // 格式化真实时间函数
 
 // 添加全局变量存储传感器序列号
 DeviceAddress sensorAddresses[16];  // 存储传感器序列号
@@ -734,6 +750,9 @@ void setup() {
   // 开始WiFi连接
   connectWiFi();
   
+  // 初始化时间同步
+  setupTimeSync();
+  
   // 初始化MQTT（在WiFi连接成功后）
   Serial.println("初始化MQTT客户端...");
   mqttClient.setBufferSize(8192);  // 设置缓冲区大小为8KB
@@ -780,6 +799,7 @@ void setup() {
     sensorRecords[i].maxTemp = DEVICE_DISCONNECTED_C;
     sensorRecords[i].avgTemp = DEVICE_DISCONNECTED_C;
     sensorRecords[i].lastStatsUpdate = 0;
+    sensorRecords[i].lastRealTime = 0;  // 初始化真实时间戳
     
     // 获取初始温度值
     sensors.requestTemperatures();
@@ -845,6 +865,9 @@ void loop() {
     connectWiFi();
   } else {
     checkWiFiStatus();
+    
+    // 时间同步（仅在WiFi连接时）
+    syncTime();
     
     // WiFi连接成功后，处理MQTT
     if (!mqttConnected) {
@@ -989,6 +1012,9 @@ void readTemperatures() {
             // 存储温度数据
             sensorRecords[i].temps[sensorRecords[i].currentIndex] = tempC;
             sensorRecords[i].timestamps[sensorRecords[i].currentIndex] = currentMillis;
+            
+            // 记录真实时间戳
+            sensorRecords[i].lastRealTime = getCurrentRealTime();
             
             // 更新索引和计数
             sensorRecords[i].currentIndex = (sensorRecords[i].currentIndex + 1) % MAX_RECORDS;
@@ -1432,6 +1458,10 @@ void publishTemperatureData() {
 String createTemperatureJSON() {
   DynamicJsonDocument doc(8192);  // 分配8KB内存用于JSON文档
   
+  // 添加系统时间信息
+  doc["system_time"] = formatRealTime(getCurrentRealTime());
+  doc["time_synced"] = timeSynced;
+  
   // 为每个传感器创建数据
   for (int i = 0; i < totalSensors; i++) {
     // 生成序列号显示
@@ -1456,6 +1486,9 @@ String createTemperatureJSON() {
     } else {
       sensorObj["c_t"] = "null";
     }
+    
+    // 添加真实时间戳
+    sensorObj["last_time"] = formatRealTime(sensorRecords[i].lastRealTime);
     
     // 添加历史温度数组
     JsonArray historyArray = sensorObj.createNestedArray("l_t");
@@ -1549,7 +1582,7 @@ void printSystemInfo() {
   unsigned long currentMillis = millis();
   
   // 每秒打印一次
-  if (currentMillis - lastPrintTime >= 1000) {
+  if (currentMillis - lastPrintTime >= 10000) {
     lastPrintTime = currentMillis;
     
     Serial.println("\n=== 系统信息 ===");
@@ -1589,6 +1622,14 @@ void printSystemInfo() {
     // MQTT信息
     Serial.print("MQTT状态: ");
     Serial.println(mqttConnected ? "已连接" : "未连接");
+    
+    // 时间同步信息
+    Serial.print("时间同步状态: ");
+    Serial.println(timeSynced ? "已同步" : "未同步");
+    if (timeSynced) {
+      Serial.print("当前时间: ");
+      Serial.println(formatRealTime(getCurrentRealTime()));
+    }
     
     // 屏幕信息
     Serial.print("屏幕状态: ");
@@ -1640,5 +1681,91 @@ void printSystemInfo() {
     Serial.println(digitalRead(TFT_BL) ? "HIGH" : "LOW");
     
     Serial.println("================\n");
+  }
+}
+
+void setupTimeSync() {
+  // 配置时区
+  configTime(NTP_GMT_OFFSET * 3600, NTP_DAYLIGHT_OFFSET * 3600, NTP_SERVER);
+  
+  Serial.println("时间同步配置完成");
+  Serial.print("NTP服务器: ");
+  Serial.println(NTP_SERVER);
+  Serial.print("时区偏移: UTC+");
+  Serial.println(NTP_GMT_OFFSET);
+}
+
+void syncTime() {
+  if (!wifiConnected) {
+    return;  // WiFi未连接时无法同步时间
+  }
+  
+  unsigned long currentMillis = millis();
+  
+  // 检查是否需要更新时间
+  if (!timeSynced || (currentMillis - lastNTPUpdate >= NTP_UPDATE_INTERVAL)) {
+    Serial.println("开始同步时间...");
+    
+    // 等待时间同步
+    int retryCount = 0;
+    while (!timeSynced && retryCount < 10) {
+      time_t now = time(nullptr);
+      if (now > 24 * 3600) {  // 时间同步成功（时间戳大于1天）
+        timeSynced = true;
+        lastNTPUpdate = currentMillis;
+        lastRealTime = now;
+        
+        // 格式化并打印当前时间
+        struct tm timeinfo;
+        if (gmtime_r(&now, &timeinfo)) {
+          Serial.print("时间同步成功: ");
+          Serial.printf("%04d-%02d-%02d %02d:%02d:%02d\n",
+                       timeinfo.tm_year + 1900,
+                       timeinfo.tm_mon + 1,
+                       timeinfo.tm_mday,
+                       timeinfo.tm_hour,
+                       timeinfo.tm_min,
+                       timeinfo.tm_sec);
+        }
+        break;
+      }
+      delay(1000);
+      retryCount++;
+      Serial.print("等待时间同步... ");
+      Serial.println(retryCount);
+    }
+    
+    if (!timeSynced) {
+      Serial.println("时间同步失败");
+    }
+  }
+}
+
+time_t getCurrentRealTime() {
+  if (timeSynced) {
+    return time(nullptr);
+  } else {
+    return 0;  // 时间未同步时返回0
+  }
+}
+
+String formatRealTime(time_t timestamp) {
+  if (timestamp == 0) {
+    return "未同步";
+  }
+  
+  struct tm timeinfo;
+  if (gmtime_r(&timestamp, &timeinfo)) {
+    char timeStr[32];
+    snprintf(timeStr, sizeof(timeStr), "%04d-%02d-%02d %02d:%02d:%02d",
+             timeinfo.tm_year + 1900,
+             timeinfo.tm_mon + 1,
+             timeinfo.tm_mday,
+             timeinfo.tm_hour,
+             timeinfo.tm_min,
+             timeinfo.tm_sec);
+    return String(timeStr);
+  } else {
+    return "格式化失败";
   }
 } 
