@@ -14,7 +14,7 @@
 
 // WiFi连接参数
 #define WIFI_SSID "MTK_CHEETAH_AP_2.4G"      // 请修改为您的WiFi名称
-#define WIFI_PASSWORD "5680578abc.."  // 请修改为您的WiFi密码
+#define WIFI_PASSWORD ""  // 请修改为您的WiFi密码
 #define WIFI_TIMEOUT 10000           // WiFi连接超时时间（毫秒）
 
 // WiFi功率设置
@@ -27,11 +27,11 @@
 #define CPU_FREQ_MHZ 80              // CPU频率 (80MHz降低功耗)
 
 // MQTT配置参数
-#define MQTT_SERVER "ebd16e9d.ala.cn-hangzhou.emqxsl.cn"  // MQTT服务器地址
+#define MQTT_SERVER ""  // MQTT服务器地址
 #define MQTT_PORT 8883               // MQTT服务器端口
 #define MQTT_CLIENT_ID "esp32c3print"  // MQTT客户端ID
 #define MQTT_USERNAME "esp32c3print"             // MQTT用户名（如果需要）
-#define MQTT_PASSWORD "yjMMjxnbcPNifc8"             // MQTT密码（如果需要）
+#define MQTT_PASSWORD "xxxxxx"             // MQTT密码（如果需要）
 #define MQTT_SUBSCRIBE_TOPIC "testtopic"  // 订阅主题
 #define MQTT_PUBLISH_TOPIC "testtopic"       // 发布主题
 
